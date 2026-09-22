@@ -1,0 +1,31 @@
+name = "Intraday-trailing 150K"
+notes = """
+Illustrative. Same rule shape as intraday_trailing_50k at a larger size, to show
+how the drawdown-to-target ratio and the price change the economics.
+"""
+
+[evaluation]
+start_balance = 150000
+profit_target = 9000
+fee = 60.0
+fee_period_days = 21
+min_days = 1
+max_contracts = 17
+drawdown = { amount = 5000, mode = "intraday_trailing" }
+
+[funded]
+start_balance = 150000
+activation_fee = 140.0
+max_contracts = 17
+drawdown = { amount = 5000, mode = "intraday_trailing", lock_offset = 100 }
+payout_min_balance = 5100
+payout_keep_balance = 5100
+min_days_between_payouts = 8
+min_profitable_days = 5
+profitable_day_amount = 50
+consistency = 0.30
+payout_caps = [2500, 2500, 2500, 2500, 2500, 3000]
+min_payout = 500
+split_full_amount = 25000
+profit_split = 0.9
+max_payouts = 6

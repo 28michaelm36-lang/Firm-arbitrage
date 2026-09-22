@@ -1,0 +1,24 @@
+name = "Static 50K"
+notes = """
+Illustrative. Static drawdown in both phases (the floor never moves), a one-time
+evaluation fee, no activation fee, and an 80% split. Check every number against
+your firm's current rules.
+"""
+
+[evaluation]
+start_balance = 50000
+profit_target = 3000
+fee = 99.0
+min_days = 1
+max_contracts = 5
+drawdown = { amount = 2000, mode = "static" }
+
+[funded]
+start_balance = 50000
+max_contracts = 5
+drawdown = { amount = 2000, mode = "static" }
+payout_min_balance = 500
+payout_keep_balance = 0
+min_days_between_payouts = 5
+min_payout = 250
+profit_split = 0.8

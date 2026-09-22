@@ -1,0 +1,37 @@
+name = "EOD-trailing 50K"
+notes = """
+Illustrative. End-of-day trailing drawdown that locks at the starting balance,
+a daily loss limit that pauses the day, and a 50% consistency rule in the
+evaluation. Funded payouts need five $200 days and are capped at half the
+profit. Check every number against your firm's current rules.
+"""
+
+[evaluation]
+start_balance = 50000
+profit_target = 3000
+fee = 49.0
+fee_period_days = 21
+daily_loss_limit = 1000
+daily_loss_mode = "pause"
+min_days = 2
+consistency = 0.5
+max_contracts = 5
+drawdown = { amount = 2000, mode = "eod_trailing", lock_offset = 0 }
+
+[funded]
+start_balance = 50000
+activation_fee = 149.0
+daily_loss_limit = 1000
+daily_loss_mode = "pause"
+max_contracts = 5
+drawdown = { amount = 2000, mode = "eod_trailing", lock_offset = 0 }
+payout_min_balance = 0
+payout_keep_balance = 0
+min_days_between_payouts = 5
+min_profitable_days = 5
+profitable_day_amount = 200
+payout_caps = [5000]
+payout_cap_fraction = 0.5
+min_payout = 125
+split_full_amount = 10000
+profit_split = 0.9

@@ -1,0 +1,34 @@
+name = "Intraday-trailing 50K"
+notes = """
+Illustrative. The shape of a common futures prop program: intraday trailing
+drawdown with no consistency rule in the evaluation; a trailing drawdown that
+locks at start + $100 once funded; a safety-net payout threshold; capped early
+payouts; a 30% consistency rule on payouts. Check every number against your
+firm's current rules before trusting any output.
+"""
+
+[evaluation]
+start_balance = 50000
+profit_target = 3000
+fee = 35.0              # the promo price you actually pay, per billing period
+fee_period_days = 21    # trading days per billing month
+min_days = 1
+max_contracts = 10      # full-size contracts (a micro counts as 0.1)
+drawdown = { amount = 2500, mode = "intraday_trailing" }
+
+[funded]
+start_balance = 50000
+activation_fee = 140.0
+max_contracts = 10
+drawdown = { amount = 2500, mode = "intraday_trailing", lock_offset = 100 }
+payout_min_balance = 2600       # balance >= start + drawdown + $100 to request
+payout_keep_balance = 2600      # and it must stay there after the payout
+min_days_between_payouts = 8
+min_profitable_days = 5
+profitable_day_amount = 50
+consistency = 0.30
+payout_caps = [2000, 2000, 2000, 2000, 2000, 3000]
+min_payout = 500
+split_full_amount = 25000
+profit_split = 0.9
+max_payouts = 6
