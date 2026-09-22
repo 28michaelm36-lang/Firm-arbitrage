@@ -16,6 +16,9 @@ It contains:
   (`Bold`) and extraction of the funded drawdown (`Harvest`).
 - **asymmetry3, menu arbitrage**: pick programs and prices by the value their
   rules imply (`compare` command). See [docs/new-strategies.md](docs/new-strategies.md).
+- **manual evaluations**: take your real pass rate as given, test it against
+  luck, and value the funded side (`manual` command). See
+  [docs/manual-evaluations.md](docs/manual-evaluations.md).
 
 Pure Python 3.11+, standard library only.
 
@@ -38,6 +41,9 @@ python -m propfirm compare configs/programs/*.toml --instrument MNQ --round-turn
 # Custom policy parameters
 python -m propfirm simulate configs/programs/eod_trailing_50k.toml \
     --eval "asymmetry1:risk=2400,reward=480,land_exactly=1" --funded "harvest:max_risk_frac=0.5"
+
+# Evaluations you pass by hand: is 50% an edge, and what is each one worth?
+python -m propfirm manual configs/programs/intraday_trailing_50k.toml --pass-rate 0.5 --days 2 --attempts 10
 
 # Exact optimal staking to pass (dynamic program), and whether bold play is optimal for you
 python -m propfirm optimize --program configs/programs/static_50k.toml --winrate 0.5
@@ -125,7 +131,8 @@ propfirm/
   lifecycle.py    Monte Carlo of evaluation -> activation -> funded payouts; economics
   dp.py           exact dynamic program for optimal staking to a goal
   instruments.py  NQ / MNQ / ES / MES with default all-in costs
-  cli.py          simulate | compare | optimize
+  stats.py        binomial checks for a real track record
+  cli.py          simulate | compare | manual | optimize
 configs/programs/ illustrative program rules
 docs/             strategy write-ups
 tests/            unittest suite, including the theory checks above

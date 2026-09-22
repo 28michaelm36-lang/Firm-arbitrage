@@ -4,7 +4,7 @@ from __future__ import annotations
 import math
 import random
 import statistics
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 
 from .account import Account
 from .instruments import Instrument
@@ -119,7 +119,17 @@ def run_attempt(program: Program, eval_policy: Policy, funded_policy: Policy,
     eval_fees = ev.fee * periods
     if not passed:
         return Attempt(False, days, periods, eval_fees=eval_fees)
+    return run_funded(program, funded_policy, instrument, rng, tilt, horizon_days,
+                      Attempt(True, days, periods, eval_fees=eval_fees))
 
+
+def run_funded(program: Program, policy: Policy, instrument: Instrument,
+               rng: random.Random, tilt: float = 0.0, horizon_days: int = 250,
+               passed: Attempt | None = None) -> Attempt:
+    """Trade one funded account from activation until it is blown, graduates or
+    reaches the horizon. `passed` carries the evaluation that led to it."""
+    passed = passed or Attempt(True, 0, 0)
+    funded_policy = policy
     fr = program.funded
     acct = Account.open(fr)
     win = _Window(acct.balance, fr.profitable_day_amount)
@@ -150,10 +160,9 @@ def run_attempt(program: Program, eval_policy: Policy, funded_policy: Policy,
     if fr.monthly_fee:
         funded_fees += fr.monthly_fee * math.ceil(fdays / fr.fee_period_days)
     alive = not acct.blown and not graduated
-    return Attempt(
-        True, days, periods, funded_days=fdays, payouts=payouts,
-        gross=gross, net=net, eval_fees=eval_fees, funded_fees=funded_fees,
-        graduated=graduated, alive=alive,
+    return replace(
+        passed, funded_days=fdays, payouts=payouts, gross=gross, net=net,
+        funded_fees=funded_fees, graduated=graduated, alive=alive,
         stranded=acct.room if not acct.blown else 0.0,
     )
 
