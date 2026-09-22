@@ -1,8 +1,8 @@
 # New structural-alpha strategies
 
-asymmetry1 exploits one mispricing: an evaluation's price against the value
-of passing it. Prop-firm rules contain others. Each strategy below comes from a
-different term of
+asymmetry1, the $2,000-for-$400 ORB, needs a market edge: a live win rate
+above about 87%. The strategies below need none. Each comes from a different
+term of
 
 ```
 EV per evaluation  ~=  P(pass) x (split x eta x D_funded - activation)  -  evaluation price
@@ -36,13 +36,19 @@ the account when it blows or graduates. The firm keeps all of that.
    attempt a day.
 4. **Withdraw the maximum the day you are allowed**, then start the next cycle.
 
-**Results** (gross withdrawn per funded account as a fraction of the funded drawdown):
+**Results** at no edge. eta is gross withdrawn per funded account as a
+fraction of the funded drawdown:
 
-| program               | eta with asymmetry1 funded | eta with harvest | EV per evaluation, asymmetry1+ -> asymmetry2 |
-|-----------------------|---------------------------:|-----------------:|---------------------------------------------:|
-| Intraday-trailing 50K |                      15.5% |            27.8% |                                  $36 -> $126 |
-| EOD-trailing 50K      |                      37.0% |            75.9% |                                 $115 -> $325 |
-| Static 50K            |                      87.1% |            93.2% |                                 $447 -> $480 |
+| program               | eta, ORB traded funded | eta, harvest | EV per evaluation, asymmetry1 -> asymmetry2 |
+|-----------------------|-----------------------:|-------------:|--------------------------------------------:|
+| Intraday-trailing 50K |                  12.4% |        27.8% |                                  -$6 -> $126 |
+| EOD-trailing 50K      |                  29.7% |        75.9% |                                  $19 -> $325 |
+| Static 50K            |                  76.7% |        93.2% |                                 $277 -> $480 |
+
+If the ORB has a real edge, harvest's bold legs throw it away, because they
+trade a different bracket. Keep trading the ORB funded, and take harvest's
+other two rules: withdraw the maximum the day it is allowed, and on days that
+exist only to meet a day count, trade at minimum risk.
 
 Static accounts are already near the 100% ceiling, because only commissions
 leak. Trailing accounts are where harvesting pays: the pre-lock ratchet and the

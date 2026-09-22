@@ -46,6 +46,12 @@ class ClosedForms(unittest.TestCase):
             self.assertAlmostEqual(p, wr)
         self.assertEqual(tilt_from_winrate(0.5), 0.0)
 
+    def test_tilt_on_short_odds_brackets(self):
+        fl = Floor(level=0, hwm=50_000)
+        self.assertAlmostEqual(tilt_from_winrate(2000 / 2400, 0.2), 0.0)
+        p = win_probability(50_000, fl, 2000, 400, tilt=tilt_from_winrate(0.88, 0.2))
+        self.assertAlmostEqual(p, 0.88)
+
     def test_trailing_all_in_is_exponential(self):
         fl = Floor(level=47_500, hwm=50_000, trail=2500)
         self.assertAlmostEqual(win_probability(50_000, fl, 2500, 3000), math.exp(-3000 / 2500))

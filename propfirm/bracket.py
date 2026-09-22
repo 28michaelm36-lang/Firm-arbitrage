@@ -54,11 +54,15 @@ class Outcome:
     floor: float
 
 
-def tilt_from_winrate(winrate: float) -> float:
-    """Tilt giving `winrate` on a 1:1 bracket with a static floor (0.5 -> 0, no edge)."""
+def tilt_from_winrate(winrate: float, reward_to_risk: float = 1.0) -> float:
+    """Tilt giving `winrate` on a bracket with this reward:risk, far from the floor.
+
+    A fair game wins 1 / (1 + reward_to_risk) of the time: 50% at 1:1, 83.3%
+    when risking $2,000 to make $400 (reward_to_risk = 0.2).
+    """
     if not 0.0 < winrate < 1.0:
         raise ValueError("winrate must be between 0 and 1")
-    return 1.0 - math.log(winrate) / math.log(0.5)
+    return 1.0 - math.log(winrate) / math.log(1.0 / (1.0 + reward_to_risk))
 
 
 def _segments(entry: float, fl: Floor, stop: float):

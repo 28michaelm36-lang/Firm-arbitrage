@@ -43,18 +43,33 @@ class Payouts(unittest.TestCase):
         self.assertAlmostEqual(fr.trader_share(1000, 5000), 900)
 
 
+class Orb(unittest.TestCase):
+    def test_land_exactly_keeps_the_shape_and_stops_at_the_target(self):
+        from propfirm.policies import View
+        prog = load_program("configs/programs/intraday_trailing_50k.toml")
+        view = View(phase="eval", program=prog, rules=prog.evaluation, instrument=FREE,
+                    balance=52_900, floor=50_400, hwm=52_900, day_pnl=0, day_trades=0,
+                    trading_days=5, loss_limit_room=math.inf, window_start=50_000,
+                    window_days=5, window_profitable_days=5, window_best_day=400)
+        full = Asymmetry1().next_trade(view)
+        exact = Asymmetry1(land_exactly=1).next_trade(view)
+        self.assertEqual((full.risk, full.reward), (2000, 400))
+        self.assertAlmostEqual(exact.reward, 101)
+        self.assertAlmostEqual(exact.risk, 505)
+
+
 class Theory(unittest.TestCase):
     def test_every_zero_edge_strategy_passes_at_the_same_rate_without_costs(self):
         # Static floor: P(pass) = D / (D + T) whatever the sizing, if you never overshoot.
         prog = static_program()
-        for policy in (Bold(), Bold(max_risk_frac=0.2, min_odds=0), Asymmetry1(wins=3)):
+        for policy in (Bold(), Bold(max_risk_frac=0.2, min_odds=0), Asymmetry1(risk=1000, reward=1000)):
             s = simulate(prog, policy, Harvest(), FREE, n=6000, seed=4)
             self.assertLess(abs(s.p_pass - 0.4), 4 * math.sqrt(0.24 / 6000), policy)
 
     def test_intraday_trailing_pass_rate_is_exponential(self):
         prog = load_program("configs/programs/intraday_trailing_50k.toml")
         p = math.exp(-3000 / 2500)
-        for policy in (Bold(), Asymmetry1(wins=4)):
+        for policy in (Bold(), Asymmetry1(risk=750, reward=750), Asymmetry1(risk=2000, reward=500)):
             s = simulate(prog, policy, Harvest(), FREE, n=6000, seed=5)
             self.assertLess(abs(s.p_pass - p), 4 * math.sqrt(p * (1 - p) / 6000), policy)
 
@@ -74,7 +89,8 @@ class Smoke(unittest.TestCase):
         nq = INSTRUMENTS["NQ"]
         for path in sorted(glob.glob("configs/programs/*.toml")):
             prog = load_program(path)
-            for e, f in (("asymmetry1", "asymmetry1"), ("bold", "harvest"),
+            for e, f in (("asymmetry1", "asymmetry1"), ("asymmetry1:land_exactly=1", "harvest"),
+                         ("bold", "harvest"),
                          ("bold:max_risk_frac=0.3,min_odds=0", "harvest:min_odds=0.5")):
                 s = simulate(prog, parse_policy(e), parse_policy(f), nq, n=300, seed=1)
                 self.assertTrue(0 <= s.p_pass <= 1)

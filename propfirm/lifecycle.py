@@ -262,9 +262,11 @@ class Summary:
 
 def simulate(program: Program, eval_policy: Policy, funded_policy: Policy,
              instrument: Instrument, n: int = 10_000, seed: int = 1, tilt: float = 0.0,
-             horizon_days: int = 250, strategy: str | None = None) -> Summary:
+             horizon_days: int = 250, strategy: str | None = None,
+             max_eval_days: int = 60) -> Summary:
     rng = random.Random(seed)
-    attempts = [run_attempt(program, eval_policy, funded_policy, instrument, rng, tilt, horizon_days)
+    attempts = [run_attempt(program, eval_policy, funded_policy, instrument, rng, tilt,
+                            horizon_days, max_eval_days)
                 for _ in range(n)]
     name = strategy or f"{eval_policy.name} -> {funded_policy.name}"
     return Summary(program, name, instrument, tilt, attempts)

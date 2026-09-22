@@ -1,156 +1,162 @@
 # Improving asymmetry1
 
-## What asymmetry1 was taken to be
+## What asymmetry1 is
 
-The asymmetry1 code and notes were not in this repository, so the baseline
-(`Asymmetry1` in `propfirm/policies.py`) is a reconstruction of the idea:
+An opening-range-breakout (ORB) trade: one per session, risking **$2,000 to
+make $400**, in the evaluation and again once funded (`Asymmetry1` in
+`propfirm/policies.py`). The first version of this doc wrongly modelled a 1:1
+bracket; everything below is for the real 5:1 shape.
 
-> An evaluation costs a small fixed fee. Passing unlocks a funded account worth
-> far more. The downside is capped at the fee, so trade the evaluation for a
-> pass, not for P&L: one fixed bracket per day, sized so that N straight
-> winners (default 2) hit the target. Keep using that bracket once funded.
+Run it at your own win rate. `--winrate-rr 0.2` says the win rate was
+measured on a $400-for-$2,000 bracket:
 
-If your version differs (sizes, R:R, trades per day, stop rules, how you trade
-funded), set it with `--eval "asymmetry1:wins=3,reward_to_risk=1.5,trades_per_day=1"`,
-or add it as a policy class, and rerun everything below. The improvements are
-ranked by how much EV they added on the illustrative programs. All numbers are
-at zero edge with NQ at $9 round turn unless stated.
+```bash
+python -m propfirm simulate configs/programs/intraday_trailing_50k.toml \
+    --strategy asymmetry1 --winrate 0.88 --winrate-rr 0.2 --stop-ticks 160
+```
 
-## 1. Aim at the exact remaining distance, net of commissions
+Unless stated, numbers are for the illustrative intraday-trailing 50K program
+($2,500 trailing drawdown, $3,000 target, $35 evaluation), NQ at $9 round
+turn including slippage, and 20,000 simulated evaluations per cell.
 
-**The biggest single fix.** A fixed bracket leaks in two ways:
+## 1. The win rate that breaks even decides everything
 
-- **Commission shortfall.** Two $1,500 winners at $72 of commission each net
-  $2,856, not $3,000, so a third win is needed.
-- **Overshoot.** The third win lands $1,300 past the target. That profit
-  counts for nothing, but it was paid for with pass probability.
+A bracket risking $2,000 to make $400 wins **83.3%** of the time with no edge.
+After a round-trip cost of c per trade, you need
 
-With the costs set to zero, asymmetry1 passes the intraday-trailing 50K
-evaluation 30.6% of the time, which is the theoretical ceiling. **Any**
-commission drops it to about 16%:
+```
+break-even win rate = (2000 + c) / 2400
+```
 
-| round turn (NQ) | asymmetry1 pass | asymmetry1+ pass |
-|----------------:|----------------:|-----------------:|
-|              $0 |           30.6% |            30.0% |
-|           $4.50 |           16.2% |            29.4% |
-|              $9 |           16.1% |            28.9% |
-|             $18 |           15.4% |            28.0% |
+Each **$24 of cost per trade adds one point**:
 
-That cliff matches the earlier observation that commissions push up the
-consecutive-win requirement. The fix is in `bold_bracket`: every trade's
-target is the remaining distance to the pass level **plus that trade's own
-round-trip cost**, so a winner lands exactly on the target.
+| cost per trade                      | break-even win rate |
+|-------------------------------------|--------------------:|
+| none                                |               83.3% |
+| 10 NQ at $9 ($90)                   |               87.1% |
+| 100 MNQ at $2 ($200)                |               91.7% |
 
-## 2. Go bold unless you have a measured edge
+On a 5:1 shape, slippage on the stop matters as much as commission. Measure
+the ORB's win rate on real fills, not on backtest prices.
 
-Result 1 in the README says sizing cannot beat the pass-rate ceiling; it can
-only reduce the leak. The fewest trades means the least commission, and aiming
-at the target means no overshoot. `Bold` risks the distance to the floor on one
-bracket aimed at the target, and never risks more than it is trying to make
-(`min_odds=1`, which is Dubins–Savage bold play near the goal).
+## 2. Below about an 87% win rate, asymmetry2 is worth more than the ORB
 
-The dynamic program shows when this stops being right
-(`python -m propfirm optimize --program configs/programs/static_50k.toml --winrate W`):
+EV per evaluation bought:
 
-| 1:1 win rate | optimal P(pass) | bold P(pass) | best first trade |
-|-------------:|----------------:|-------------:|------------------|
-| 50% (no edge)|          40.01% |       40.01% | all-in to target |
-|          52% |          47.44% |       42.14% | risk ~$114 to make ~$918 |
+| ORB win rate | ORB $2,000:$400 | ORB $2,400:$480 | ORB $1,000:$200 | asymmetry2 (needs no edge) |
+|-------------:|----------------:|----------------:|----------------:|---------------------------:|
+| 83.3% (none) |             -$3 |             $20 |            -$53 |                       $125 |
+|          86% |             $83 |            $132 |             $11 |                       $125 |
+|          88% |            $250 |            $309 |            $237 |                       $125 |
+|          90% |            $665 |            $675 |            $833 |                       $125 |
+|          92% |          $1,557 |          $1,371 |          $2,023 |                       $125 |
 
-With a real edge, the optimum becomes a **ladder** of small, long-odds brackets
-aimed at the target: `bold:max_risk_frac=0.1,min_odds=0`. In the full simulator
-the ladder matches bold at 50%, beats it from about 51%, and at 55% the plain
-grind wins outright. Only move off bold play if your own fills show that edge
-*after* costs.
+asymmetry2 (bold evaluation plus drawdown harvest, see
+[new-strategies.md](new-strategies.md)) earns its $125 from the rules alone.
+If you cannot show at least 86–87% on live fills, switch to it. Above 88%,
+keep the ORB. It is then a real edge, and the asymmetry of cheap evaluations
+multiplies it.
 
-## 3. Use a different policy once funded
+Do not pass `--winrate-rr 0.2` edges to `bold` or `harvest`. The simulator
+would carry the ORB's edge over to their different bracket shapes, and an ORB
+win rate says nothing about those.
 
-The evaluation objective is "reach the target once". The funded objective is
-"maximise total withdrawals". Using the evaluation bracket funded left most of
-the account's value on the table. See `Harvest` and
-[new-strategies.md](new-strategies.md#asymmetry2--drawdown-harvest). Gross
-withdrawn per funded account, as a fraction of the funded drawdown:
+## 3. Cut the cost per trade (the $200 problem)
 
-| program               | asymmetry1 bracket funded | Harvest |
-|-----------------------|--------------------------:|--------:|
-| Intraday-trailing 50K |                     15.5% |   27.8% |
-| EOD-trailing 50K      |                     37.0% |   75.9% |
-| Static 50K            |                     87.1% |   93.2% |
+At $2,000 risk and a 10-point stop, MNQ needs 100 contracts, about $200 per
+round trip. That is half of the $400 target:
 
-Both columns use the same `Bold` evaluation (asymmetry1+ vs asymmetry2), so the
-only difference is the funded policy.
+| ORB win rate | NQ, 10 contracts | MNQ, 100 contracts |
+|-------------:|-----------------:|-------------------:|
+|          88% |             $250 |               -$24 |
+|          90% |             $665 |                $30 |
+|          92% |           $1,557 |               $185 |
 
-## 4. Pick the program for its drawdown type before its size
+- **Trade minis, not micros**, for the same dollar risk.
+- **Set `--stop-ticks` to your real average ORB stop.** A wider stop means
+  fewer contracts for the same $2,000, and a cost that is a smaller slice of
+  the $400.
+- **Check the commission template** if a session costs $200.
 
-The pass-rate ceiling depends on how the floor moves:
+## 4. Size to the edge
 
-- a static floor, or an end-of-day trailing floor with the whole target in one
-  session: `D / (D + T)`;
-- an intraday trailing floor: `exp(-T / D)`. It follows every open high, so
-  even a losing trade's unrealised profit costs you drawdown.
+The same ORB signal at a different size changes the result. Keep the 5:1
+shape and scale the contract count:
 
-A $2,500 / $3,000 program gives 45% static and 30% intraday trailing. Rules that
-force the target over several days, like consistency rules and daily loss
-limits, re-introduce the end-of-day ratchet. That is why the EOD-trailing
-example, which has a 50% consistency rule and a $1,000 daily limit, passes at
-28% instead of 40%. See asymmetry3 in [new-strategies.md](new-strategies.md).
+- **Modest edge (86–88%): size up.** After $90 of cost, $2,400:$480 needs 8
+  wins instead of 10 and beats $2,000:$400. Fewer trades means less cost and
+  fewer chances to lose.
+- **Large edge (90%+): size down.** $1,000:$200 has the highest EV, because
+  the edge compounds over more trades, but it takes about 34 trading days to
+  pass instead of 11.
 
-## 5. Only buy below the break-even price
+This matches the dynamic program's rule: the less edge you have, the fewer and
+bigger the bets; the more edge, the smaller. `python -m propfirm optimize`
+shows it on a static floor.
 
-`compare` prints the evaluation price at which EV is zero. On the intraday
-trailing 50K example it is $43 for asymmetry1 and $161 for asymmetry2, against
-the $35 promo price in the config. At list prices of $150 or more, the same
-program is negative EV for the baseline and barely positive for the best
-strategy. Treat promotions as the whole game for intraday-trailing programs.
+## 5. Why a $2,000 stop on a $2,500 trailing drawdown is fragile
 
-## 6. Cut cost per dollar of risk
+The trailing floor follows each $400 win up, so the room stays at $2,500. One
+loss leaves about $500, and the next trade is effectively all-in for $400.
+Passing therefore needs roughly **8–10 wins with at most one loss**:
+`3000 / (400 - cost)` wins, so $90 of cost turns 8 required wins into 10. At
+the no-edge win rate that gives about a 17% pass rate, against the 30%
+ceiling that any strategy could reach on this program.
 
-What matters is round-trip cost as a fraction of the dollar risk
-(`Instrument.cost_rate`):
+Program fit (no edge, EV per evaluation):
 
-- **Use full-size contracts over micros** for the same dollar risk. At the
-  defaults NQ costs 4.5% of risk and MNQ 10%. Intraday-trailing 50K asymmetry2
-  EV: $122 with NQ vs $74 with MNQ.
-- **Use wider stops** with fewer contracts (`--stop-ticks`).
-- **Check your commission template.** At $18 per NQ round turn the baseline is
-  negative EV on the intraday example.
+| program              | ORB   | note |
+|----------------------|------:|------|
+| Static 50K ($2,000)  | $277  | the stop equals the whole drawdown, so one loss ends it |
+| EOD-trailing 50K     |  $19  | the $1,000 daily loss limit cuts the $2,000 stop in half |
+| Intraday 50K         |  -$6  | see above |
+| Intraday 150K        | -$90  | 23–29 wins needed; about 45 trading days, several billing months |
 
-## 7. Never reset a live evaluation
+The 150K result also depends on `--max-eval-days` (default 60). Raise it if
+you would keep paying for a slow evaluation.
 
-Resetting to "refresh the drawdown" feels like buying back pass probability.
-With unlimited re-buys it is always worse. Continuing is free, and if the
-attempt fails you can still buy a fresh one. Let V be the value of a pass, P
-your current pass probability, P_f a fresh one's, and f the fee. Then
+## 6. Land the last trade exactly (asymmetry1+)
+
+When the target is closer than one full $400 win, shrink the contracts
+(keeping 5:1) so the last winner lands on the target instead of past it:
+`asymmetry1:land_exactly=1`. Worth about +1 point of pass rate. Small, but
+free.
+
+## 7. Once funded, withdraw the maximum as soon as you can
+
+Money left in a funded account is still at risk, and the firm keeps it when
+the account is blown. The simulator always withdraws the maximum the rules
+allow. Do the same.
+
+## 8. Check the reward-to-risk rule
+
+At least one major futures firm has capped funded-account trades at 5:1 risk
+to reward. The ORB sits exactly on that line. A widened stop, or a stop that
+slips, pushes it over, and a denied payout zeroes the EV. Read your firm's
+current funded-account rules. If there is a cap, keep the planned stop
+strictly inside it.
+
+## 9. Never reset a live evaluation
+
+Resetting to "refresh the drawdown" after a loss feels like buying back pass
+probability. With unlimited re-buys it is always worse. Continuing is free,
+and if the attempt fails you can still buy a fresh one. Let V be the value of
+a pass, P your current pass probability, P_f a fresh one's, and f the fee.
+Then
 
     value(continue) - value(reset now) = f x P / P_f > 0.
 
-(A reset rule was tried in the simulator and lowered return on fees.) Use a
-reset only as a cheaper **re-buy after a failure**, and model that with
-`--fee <reset price>`. Resetting early only pays when you are short on time or
-account slots.
+Use a reset only as a cheaper re-buy after a failure (`--fee <reset price>`).
 
-## 8. Budget the bankroll for the variance
+## 10. Budget for the variance
 
-At a 28% pass rate you need 7 to 8 evaluations for a 90% chance of one funded
-account (`attempts for 90% chance of a pass` in `simulate`). Under asymmetry2,
-only 15–20% of funded accounts on the trailing examples ever reach a payout
-(48% on the static one). The EV comes from the few that pay repeatedly. Size
-the fee budget so a normal losing streak does not end the programme. Running several
-accounts on independent days keeps the same EV with lower variance.
-Copy-trading them in the same direction has correlation 1, so it only
-multiplies the bet.
+At a 17–30% pass rate, you need 7–13 evaluations for a 90% chance of one
+funded account (`simulate` prints this). Run several accounts on independent
+days to smooth it. Copy-trading them in the same direction has correlation 1,
+so it only multiplies the bet.
 
-## 9. Check compliance before relying on the EV
+## 11. Calibrate against live fills
 
-Many firms restrict funded-account behaviour: maximum risk per trade,
-reward-to-risk caps, "gambling" or all-in clauses, consistency rules and
-hedging bans. A denied payout zeroes everything above. Model the compliant
-version: `harvest:max_risk_frac=0.5` shows what a 50%-of-drawdown per-trade cap
-costs on your program. Then decide with your firm's actual rulebook open.
-
-## 10. Calibrate against real fills
-
-Log every attempt: entries, exits, commissions, slippage, pass or fail. If your
-real pass rate sits well below the model's ceiling, you are leaking through
-slippage or rule friction. If it sits above, you may have an edge worth
-measuring, and then item 2 says to size down.
+Log every trade: entry, stop, target, fill prices, commission, result. After
+50–100 trades your win rate still has a standard error of 3–5 points. Put
+its lower end into `--winrate` before deciding between items 2 and 4.

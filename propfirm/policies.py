@@ -90,14 +90,17 @@ def bold_bracket(v: View, need: float, max_risk_frac: float, min_odds: float) ->
 
 @dataclass
 class Asymmetry1(Policy):
-    """Reconstructed baseline: one fixed bracket per day, sized so that `wins`
-    straight winners pass the evaluation. The same bracket is used funded.
+    """asymmetry1: an opening-range-breakout bracket, one per session, risking
+    `risk` to make `reward` ($2,000 for $400). The same bracket is traded once
+    funded; the evaluation stops trading at the target.
 
-    Replace the defaults with your real asymmetry1 parameters.
+    land_exactly=1 shrinks the bracket, keeping its shape, when the evaluation
+    target is closer than one full win, so the last winner does not overshoot.
     """
-    wins: int = 2
-    reward_to_risk: float = 1.0
+    risk: float = 2000.0
+    reward: float = 400.0
     trades_per_day: int = 1
+    land_exactly: int = 0
     coast_size: float = 25.0
     name: str = "asymmetry1"
 
@@ -108,8 +111,13 @@ class Asymmetry1(Policy):
         if v.phase == "eval" and v.balance >= ev.target_balance:
             # Target hit but not passed yet: only trade to satisfy minimum days.
             return coast(v, self.coast_size) if v.trading_days < ev.min_days else None
-        reward = ev.profit_target / self.wins
-        return Bracket(risk=reward / self.reward_to_risk, reward=reward)
+        if self.land_exactly and v.phase == "eval":
+            need = ev.target_balance + 1.0 - v.balance
+            ratio = self.risk / self.reward
+            reward = need + v.cost(need * ratio)
+            if reward < self.reward:
+                return Bracket(risk=reward * ratio, reward=reward)
+        return Bracket(risk=self.risk, reward=self.reward)
 
 
 @dataclass

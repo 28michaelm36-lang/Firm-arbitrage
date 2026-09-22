@@ -15,15 +15,19 @@ from .rules import load_program
 STRATEGIES = {
     # name: (evaluation policy, funded policy)
     "asymmetry1": ("asymmetry1", "asymmetry1"),
-    "asymmetry1+": ("bold", "asymmetry1"),
+    "asymmetry1+": ("asymmetry1:land_exactly=1", "asymmetry1"),
     "asymmetry2": ("bold", "harvest"),
-    "grind": ("asymmetry1:wins=12,reward_to_risk=1.5,trades_per_day=2",
-              "asymmetry1:wins=12,reward_to_risk=1.5,trades_per_day=2"),
+    "grind": ("asymmetry1:risk=167,reward=250,trades_per_day=2",
+              "asymmetry1:risk=167,reward=250,trades_per_day=2"),
 }
 
 
 def _instrument(args):
     return INSTRUMENTS[args.instrument].with_overrides(args.round_turn, args.stop_ticks)
+
+
+def _edge(args):
+    return f"win rate {args.winrate:.3f} at reward:risk {args.winrate_rr:g}"
 
 
 def _program(path, args):
@@ -39,10 +43,11 @@ def _policies(args, strategy):
 def _run(program, strategy, args, n=None):
     eval_policy, funded_policy = _policies(args, strategy)
     instrument = _instrument(args)
-    tilt = tilt_from_winrate(args.winrate)
+    tilt = tilt_from_winrate(args.winrate, args.winrate_rr)
     label = strategy or f"{eval_policy.name} -> {funded_policy.name}"
     return simulate(program, eval_policy, funded_policy, instrument, n=n or args.n,
-                    seed=args.seed, tilt=tilt, horizon_days=args.horizon, strategy=label)
+                    seed=args.seed, tilt=tilt, horizon_days=args.horizon, strategy=label,
+                    max_eval_days=args.max_eval_days)
 
 
 def cmd_simulate(args):
@@ -72,7 +77,7 @@ def cmd_compare(args):
               f"{s.breakeven_eval_price:>9,.0f}")
     inst = _instrument(args)
     print(f"\n{inst.name} ${inst.round_turn:.2f} round turn, {inst.stop_ticks:g}-tick stop, "
-          f"1:1 win rate {args.winrate:.3f}, n={args.n:,} per row.")
+          f"{_edge(args)}, n={args.n:,} per row.")
     print("eff = gross withdrawn per funded account / funded drawdown. "
           "max price = evaluation price (per billing period) at which EV is zero.")
 
@@ -87,10 +92,10 @@ def cmd_optimize(args):
     if args.max_contracts is not None:
         max_minis = args.max_contracts
     cost = (lambda r: 0.0) if args.no_costs else (lambda r: instrument.cost(r, max_minis))
-    tilt = tilt_from_winrate(args.winrate)
+    tilt = tilt_from_winrate(args.winrate, args.winrate_rr)
     sol = solve_goal(room, need, cost, tilt, grid=args.grid)
     print(f"Reach +${need:,.0f} before losing ${room:,.0f} (static floor), "
-          f"1:1 win rate {args.winrate:.3f}, "
+          f"{_edge(args)}, "
           f"{'no costs' if args.no_costs else f'{instrument.name} ${instrument.round_turn:.2f} RT'}")
     print(f"{'room':>8} {'optimal':>8} {'bold':>8} {'gain':>7}   best first trade")
     for frac in (1.0, 0.8, 0.6, 0.4, 0.2):
@@ -112,13 +117,18 @@ def build_parser():
         sp.add_argument("--round-turn", type=float, help="all-in cost per contract round turn")
         sp.add_argument("--stop-ticks", type=float, help="typical stop width in ticks")
         sp.add_argument("--winrate", type=float, default=0.5,
-                        help="your win rate on 1:1 brackets (0.5 = no edge)")
+                        help="your win rate on brackets of --winrate-rr (0.5 at 1:1 = no edge)")
+        sp.add_argument("--winrate-rr", type=float, default=1.0,
+                        help="reward:risk of the bracket --winrate was measured on "
+                             "(0.2 for risking $2,000 to make $400; no edge is then 0.833)")
 
     def sim_opts(sp):
         common(sp)
         sp.add_argument("--n", type=int, default=10_000, help="evaluation attempts to simulate")
         sp.add_argument("--seed", type=int, default=1)
         sp.add_argument("--horizon", type=int, default=250, help="funded trading days to simulate")
+        sp.add_argument("--max-eval-days", type=int, default=60,
+                        help="give up on an evaluation after this many trading days")
         sp.add_argument("--fee", type=float,
                         help="override the evaluation price (e.g. a promo or reset price)")
 

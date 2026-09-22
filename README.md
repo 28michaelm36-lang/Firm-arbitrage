@@ -6,12 +6,14 @@ pass probabilities, funded payouts, and the strategies that exploit the
 
 It contains:
 
-- **asymmetry1**: the "cheap evaluation as a call option" idea, reconstructed
-  so it can be measured (`Asymmetry1` in `propfirm/policies.py`). **Set it to
-  your real parameters**: see [docs/asymmetry1-improvements.md](docs/asymmetry1-improvements.md).
-- **asymmetry1+**: the same idea with the leaks fixed (`Bold` evaluation policy).
-- **asymmetry2, drawdown harvest**: a second structural edge on the funded
-  side (`Harvest` funded policy).
+- **asymmetry1**: the opening-range-breakout trade, risking $2,000 to make $400
+  once a session (`Asymmetry1` in `propfirm/policies.py`). What decides it is
+  whether its live win rate beats about 87%. See
+  [docs/asymmetry1-improvements.md](docs/asymmetry1-improvements.md).
+- **asymmetry1+**: the same trade, with the last one shrunk to land exactly on
+  the target.
+- **asymmetry2, drawdown harvest**: needs no edge. Bold play in the evaluation
+  (`Bold`) and extraction of the funded drawdown (`Harvest`).
 - **asymmetry3, menu arbitrage**: pick programs and prices by the value their
   rules imply (`compare` command). See [docs/new-strategies.md](docs/new-strategies.md).
 
@@ -26,12 +28,16 @@ python -m propfirm simulate configs/programs/intraday_trailing_50k.toml --strate
 # Rank programs x strategies by EV per evaluation bought, with the break-even price
 python -m propfirm compare configs/programs/*.toml --strategies asymmetry1,asymmetry1+,asymmetry2
 
-# Your own costs, price and edge
-python -m propfirm compare configs/programs/*.toml --instrument MNQ --round-turn 1.60 --fee 29 --winrate 0.5
+# The ORB at your live win rate, measured on its own $400-for-$2,000 bracket
+python -m propfirm simulate configs/programs/intraday_trailing_50k.toml \
+    --strategy asymmetry1 --winrate 0.88 --winrate-rr 0.2 --stop-ticks 160
+
+# Your own costs and price
+python -m propfirm compare configs/programs/*.toml --instrument MNQ --round-turn 1.60 --fee 29
 
 # Custom policy parameters
 python -m propfirm simulate configs/programs/eod_trailing_50k.toml \
-    --eval "asymmetry1:wins=3,reward_to_risk=1.5" --funded "harvest:max_risk_frac=0.5"
+    --eval "asymmetry1:risk=2400,reward=480,land_exactly=1" --funded "harvest:max_risk_frac=0.5"
 
 # Exact optimal staking to pass (dynamic program), and whether bold play is optimal for you
 python -m propfirm optimize --program configs/programs/static_50k.toml --winrate 0.5
@@ -88,21 +94,25 @@ NQ at $9 round turn including slippage, 40-tick stop, no edge:
 
 | program (illustrative)  | price | strategy    | pass  | eta   | EV / evaluation | break-even price |
 |-------------------------|------:|-------------|------:|------:|----------------:|-----------------:|
-| Intraday-trailing 50K   |   $35 | grind       |  8.3% |  7.5% |        -$75 ± 2 |               $2 |
-|                         |       | asymmetry1  | 15.6% | 16.6% |          $8 ± 4 |              $43 |
-|                         |       | asymmetry1+ | 28.7% | 15.5% |         $36 ± 5 |              $71 |
+| Intraday-trailing 50K   |   $35 | grind       |  8.2% |  7.6% |        -$75 ± 2 |               $2 |
+|                         |       | asymmetry1  | 17.4% | 12.4% |         -$6 ± 3 |              $29 |
+|                         |       | asymmetry1+ | 18.2% | 12.5% |         -$4 ± 3 |              $31 |
 |                         |       | asymmetry2  | 29.1% | 27.8% |        $126 ± 7 |             $161 |
-| EOD-trailing 50K        |   $49 | asymmetry1  | 21.6% | 38.1% |         $82 ± 7 |             $131 |
-|                         |       | asymmetry1+ | 28.0% | 37.0% |        $115 ± 8 |             $164 |
+| EOD-trailing 50K        |   $49 | asymmetry1  | 15.9% | 29.7% |         $19 ± 3 |              $67 |
+|                         |       | asymmetry1+ | 17.3% | 29.7% |         $25 ± 3 |              $73 |
 |                         |       | asymmetry2  | 28.1% | 75.9% |       $325 ± 17 |             $374 |
-| Static 50K              |   $99 | asymmetry1  | 28.5% | 87.4% |       $300 ± 11 |             $399 |
-|                         |       | asymmetry1+ | 39.1% | 87.1% |       $447 ± 12 |             $546 |
+| Static 50K              |   $99 | asymmetry1  | 30.7% | 76.7% |        $277 ± 8 |             $376 |
+|                         |       | asymmetry1+ | 31.9% | 77.6% |        $297 ± 8 |             $396 |
 |                         |       | asymmetry2  | 38.8% | 93.2% |       $480 ± 11 |             $579 |
-| Intraday-trailing 150K  |   $60 | asymmetry1  |  6.6% |  8.2% |        -$42 ± 3 |              $18 |
+| Intraday-trailing 150K  |   $60 | asymmetry1  |  2.7% |  6.7% |        -$90 ± 1 |               $3 |
 |                         |       | asymmetry2  | 16.5% | 25.5% |        $127 ± 9 |             $187 |
 
-`grind` is a typical small-size trader (12 wins of $250 to pass). It loses
-money on every program at zero edge. That is the flip side of the asymmetry.
+These rows assume **no edge**: the ORB wins its fair 83.3%. With an edge the
+ORB rows change completely: at an 88% live win rate it makes $250 per
+evaluation on the intraday 50K, at 90% $665. See the table in
+[docs/asymmetry1-improvements.md](docs/asymmetry1-improvements.md). `grind` is
+a typical small-size trader ($167 risk for $250). It loses money on every
+program at zero edge.
 
 ## Layout
 
@@ -111,7 +121,7 @@ propfirm/
   rules.py        program rules, loaded from TOML
   bracket.py      one bracket trade vs stop, target and (trailing) floor; closed forms
   account.py      balance, floor, daily loss limit, trading days
-  policies.py     Asymmetry1 (baseline), Bold (asymmetry1+), Harvest (asymmetry2)
+  policies.py     Asymmetry1 (the ORB), Bold and Harvest (asymmetry2)
   lifecycle.py    Monte Carlo of evaluation -> activation -> funded payouts; economics
   dp.py           exact dynamic program for optimal staking to a goal
   instruments.py  NQ / MNQ / ES / MES with default all-in costs
@@ -130,9 +140,11 @@ tests/            unittest suite, including the theory checks above
 - Commission, exchange fees and expected slippage are one round-trip cost per
   contract, paid at entry. Contracts = dollar risk / (stop ticks x tick value),
   capped at the program's contract limit. At the cap the stop widens instead.
-- An edge is a single number: your win rate on 1:1 brackets (`--winrate`). It
-  reduces the hazard of hitting the stop uniformly. Calibrate it from your own
-  fills; do not assume one.
+- An edge is a single number: your win rate on a bracket of a given
+  reward:risk (`--winrate`, `--winrate-rr`). It reduces the hazard of hitting
+  the stop uniformly. That carries it over to other bracket shapes, which is
+  only an approximation, so compare policies at the shape you measured.
+  Calibrate it from your own fills; do not assume one.
 - Trades finish within the session, with no gaps or halts. Payouts are always
   honoured. Rule changes, payout denials and firm failure are not modelled.
   Those are real risks, and a denied payout zeroes the EV.
