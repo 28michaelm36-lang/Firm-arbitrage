@@ -19,6 +19,11 @@ It contains:
 - **manual evaluations**: take your real pass rate as given, test it against
   luck, and value the funded side (`manual` command). See
   [docs/manual-evaluations.md](docs/manual-evaluations.md).
+- **asymmetry4, range bracket**: the same $2,000-for-$400 bracket, entered only
+  when the market looks range-bound (calm, choppy, near its mean). Backtested
+  bar by bar on 1-minute data (`backtest` command). On NAS100 and S&P 500 data
+  from 2012 to 2020, no filter lifted the win rate above the 83.3% of a fair
+  game. See [docs/asymmetry4.md](docs/asymmetry4.md).
 
 Pure Python 3.11+, standard library only.
 
@@ -44,6 +49,10 @@ python -m propfirm simulate configs/programs/eod_trailing_50k.toml \
 
 # Evaluations you pass by hand: is 50% an edge, and what is each one worth?
 python -m propfirm manual configs/programs/intraday_trailing_50k.toml --pass-rate 0.5 --days 2 --attempts 10
+
+# Backtest the bracket with range-bound entry filters on your own 1-minute bars
+python -m propfirm backtest "data/NAS100/*.csv" --stop 0.5% --split 2017-01-01 \
+    --program configs/programs/intraday_trailing_50k.toml
 
 # Exact optimal staking to pass (dynamic program), and whether bold play is optimal for you
 python -m propfirm optimize --program configs/programs/static_50k.toml --winrate 0.5
@@ -132,7 +141,8 @@ propfirm/
   dp.py           exact dynamic program for optimal staking to a goal
   instruments.py  NQ / MNQ / ES / MES with default all-in costs
   stats.py        binomial checks for a real track record
-  cli.py          simulate | compare | manual | optimize
+  backtest.py     asymmetry4: the bracket with entry filters, bar by bar on real data
+  cli.py          simulate | compare | manual | optimize | backtest
 configs/programs/ illustrative program rules
 docs/             strategy write-ups
 tests/            unittest suite, including the theory checks above

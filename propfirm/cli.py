@@ -1,17 +1,22 @@
-"""Command line: python -m propfirm {simulate,compare,optimize,manual} ..."""
+"""Command line: python -m propfirm {simulate,compare,optimize,manual,backtest} ..."""
 from __future__ import annotations
 
 import argparse
+import csv
+import glob
 import math
 import random
 import statistics
 import sys
+from datetime import date, timedelta
 
+from .backtest import (DEFAULT_SUITE, Config, backtest, evaluate, format_results, load_sessions,
+                       parse_filters)
 from .bracket import tilt_from_winrate
 from .dp import solve_goal
 from .instruments import INSTRUMENTS
 from .lifecycle import run_funded, simulate
-from .policies import Bold, parse_policy
+from .policies import Asymmetry1, Bold, parse_policy
 from .rules import load_program
 from .stats import attempts_to_rule_out_luck, binomial_tail, wilson_interval
 
@@ -164,6 +169,88 @@ def cmd_manual(args):
         row("evaluations for a 90% chance of a pass", math.ceil(math.log(0.1) / math.log(1 - rate)))
 
 
+def cmd_backtest(args):
+    """asymmetry4: the bracket with entry filters, bar by bar on your own data."""
+    paths = sorted({p for pattern in args.data for p in glob.glob(pattern)})
+    if not paths:
+        sys.exit(f"no files match {args.data}")
+    sessions = load_sessions(paths, args.data_tz, args.tz, args.session_start, args.session_end,
+                             args.min_bars)
+    if not sessions:
+        sys.exit("no sessions in the data between --session-start and --session-end")
+    pct = args.stop.endswith("%")
+    stop = float(args.stop.rstrip("%")) / (100 if pct else 1)
+    rr = args.reward / args.risk
+    cfg = Config(stop=stop, pct=pct, rr=rr, side=args.side, mean=args.mean, through=args.through,
+                 last_entry=args.last_entry, max_per_day=args.max_per_day, cooldown=args.cooldown)
+    program = _program(args.program, args) if args.program else None
+    max_minis = program.evaluation.max_contracts if program else math.inf
+    instrument = INSTRUMENTS[args.instrument].with_overrides(args.round_turn)
+
+    first, last = sessions[0][0].t.date(), sessions[-1][0].t.date()
+    split = date.fromisoformat(args.split) if args.split else None
+    span = lambda a, b: f"{a:%Y-%m}..{b:%Y-%m}"
+    periods = [(span(first, last), lambda d: True)]
+    if split:
+        periods = [(span(first, split - timedelta(days=1)), lambda d: d < split),
+                   (span(split, last), lambda d: d >= split)]
+    results, all_trades = [], []
+    for spec in args.filters:
+        trades = backtest(sessions, parse_filters(spec), cfg)
+        all_trades += [(spec, t) for t in trades]
+        for name, keep in periods:
+            results.append(evaluate(f"{spec}|{name}", [t for t in trades if keep(t.day)], cfg,
+                                    instrument, args.risk, max_minis))
+
+    baseline = 1 / (1 + rr)
+    stop_text = f"{100 * stop:g}% of price" if pct else f"{stop:g} points"
+    print(f"asymmetry4 backtest: {len(sessions):,} sessions, {first} to {last}, "
+          f"{args.session_start}-{args.session_end} {args.tz}")
+    print(f"  risk ${args.risk:,.0f} to make ${args.reward:,.0f}, stop {stop_text}, side {args.side}, "
+          f"mean {args.mean}, target fills {args.through:g} points through, "
+          f"{instrument.name} ${instrument.round_turn:.2f} round turn\n")
+    print(format_results(results, baseline))
+    print(f"\nhit = share of trades reaching the target. time = closed at the session end.\n"
+          f"win eq = win rate of a clean bracket with the same mean R, time exits included.\n"
+          f"edge = win eq - {baseline:.1%}, the no-edge rate. 95% CI is clustered by day.\n"
+          f"b/e = win eq needed to cover costs. $/trade = mean net P&L at ${args.risk:,.0f} risk. "
+          f"min = minutes held.")
+    print("Each row is a separate test: with 20 rows, one clears a 95% interval by luck. "
+          "Trust a filter only if it\nholds in the later period too (--split).")
+
+    if args.trades:
+        with open(args.trades, "w", newline="") as f:
+            w = csv.writer(f)
+            w.writerow(["filter", "entry_time", "side", "entry", "stop_points", "outcome", "r",
+                        "minutes", "ambiguous"])
+            for spec, t in all_trades:
+                w.writerow([spec, t.entry_time.isoformat(sep=" "), t.side, t.entry, round(t.stop, 4),
+                            t.outcome, round(t.r, 4), t.minutes, int(t.ambiguous)])
+        print(f"\n{len(all_trades):,} trades written to {args.trades}")
+
+    if program:
+        final = [r for r in results if r.label.endswith(periods[-1][0]) and r.n]
+        policy = Asymmetry1(risk=args.risk, reward=args.reward, trades_per_day=args.trades_per_day)
+        print(f"\nProp-firm EV per evaluation: {program.name}, asymmetry1 bracket "
+              f"({args.trades_per_day} per day) at each filter's {periods[-1][0]} win eq, n={args.n:,}")
+        header = f"{'filter':<44} {'win eq':>7} {'pass':>6} {'EV':>12} {'EV at CI low':>13}"
+        print(header + "\n" + "-" * len(header))
+        for r in final:
+            stops = sorted(t.stop for t in r.trades)
+            inst = instrument.with_overrides(stop_ticks=stops[len(stops) // 2] / 0.25)
+
+            def run(p):
+                p = min(max(p, 0.01), 0.999)
+                return simulate(program, policy, policy, inst, n=args.n, seed=args.seed,
+                                tilt=tilt_from_winrate(p, rr), horizon_days=args.horizon,
+                                max_eval_days=args.max_eval_days)
+            mid, low = run(r.win_rate), run(r.win_rate - 1.96 * r.win_rate_se)
+            print(f"{r.label.partition('|')[0]:<44.44} {r.win_rate:>7.1%} {mid.p_pass:>6.1%} "
+                  f"{mid.ev:>7,.0f} +/-{mid.ev_stderr:<3.0f} {low.ev:>13,.0f}")
+        print(f"Evaluation price ${program.evaluation.fee:,.0f}. Compare with asymmetry2, which "
+              f"needs no edge: python -m propfirm simulate {args.program} --strategy asymmetry2")
+
+
 def build_parser():
     p = argparse.ArgumentParser(prog="python -m propfirm", description=__doc__)
     sub = p.add_subparsers(dest="command", required=True)
@@ -210,6 +297,41 @@ def build_parser():
     m.add_argument("--funded", default="harvest", help='funded policy, e.g. "asymmetry1"')
     sim_opts(m)
     m.set_defaults(func=cmd_manual)
+
+    b = sub.add_parser("backtest", help="asymmetry4: the bracket with entry filters on 1-minute bars")
+    b.add_argument("data", nargs="+", help="1-minute bar CSV files or glob patterns")
+    b.add_argument("--filters", nargs="+", default=list(DEFAULT_SUITE),
+                   help='filter sets to test, e.g. "range:n=30,width=1+near:within=0.1"')
+    b.add_argument("--stop", default="0.5%%", help="stop in points (40) or percent of price (0.5%%)")
+    b.add_argument("--risk", type=float, default=2000.0)
+    b.add_argument("--reward", type=float, default=400.0)
+    b.add_argument("--side", default="fade", choices=("fade", "follow", "long", "short", "both"),
+                   help="fade trades toward the mean, follow away from it")
+    b.add_argument("--mean", default="vwap", help="session vwap, or sma:N")
+    b.add_argument("--through", type=float, default=0.25,
+                   help="points price must trade past the target to fill it")
+    b.add_argument("--split", help="report before and after this date (YYYY-MM-DD) separately")
+    b.add_argument("--last-entry", default="15:30", help="no new trades after this local time")
+    b.add_argument("--max-per-day", type=int, default=0, help="0 = no limit")
+    b.add_argument("--cooldown", type=int, default=0, help="bars to wait after each exit")
+    b.add_argument("--data-tz", default="UTC", help="time zone of timestamps without an offset")
+    b.add_argument("--tz", default="America/New_York", help="exchange time zone for the session")
+    b.add_argument("--session-start", default="09:30")
+    b.add_argument("--session-end", default="16:00")
+    b.add_argument("--min-bars", type=int, default=300,
+                   help="drop shorter sessions (holidays, half days, data gaps)")
+    b.add_argument("--trades", help="write every trade to this CSV")
+    b.add_argument("--program", help="also price each filter's win rate on this program")
+    b.add_argument("--trades-per-day", type=int, default=1,
+                   help="brackets per day in the prop-firm simulation")
+    b.add_argument("--instrument", default="NQ", choices=sorted(INSTRUMENTS))
+    b.add_argument("--round-turn", type=float, help="all-in cost per contract round turn")
+    b.add_argument("--n", type=int, default=4000, help="evaluation attempts to simulate per filter")
+    b.add_argument("--seed", type=int, default=1)
+    b.add_argument("--horizon", type=int, default=250, help="funded trading days to simulate")
+    b.add_argument("--max-eval-days", type=int, default=60)
+    b.add_argument("--fee", type=float, help="override the evaluation price")
+    b.set_defaults(func=cmd_backtest)
 
     o = sub.add_parser("optimize", help="exact optimal staking to pass (dynamic program)")
     o.add_argument("--program", help="take room / target / contract cap from a program's evaluation")
