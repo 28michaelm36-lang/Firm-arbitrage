@@ -62,7 +62,9 @@ def load_sessions(paths, data_tz: str = "UTC", local_tz: str = "America/New_York
                   start: str = "09:30", end: str = "16:00", min_bars: int = 0) -> list[list[Bar]]:
     """Read 1-minute bar CSVs into sessions of bars between `start` and `end`
     local time, one list per day, oldest first. Sessions with fewer than
-    `min_bars` bars (holidays, half days, gaps in the data) are dropped.
+    `min_bars` bars (holidays, half days, gaps in the data) are dropped. If
+    `start` is after `end` the session crosses midnight and belongs to the day
+    it ends on (18:00 to 09:30 is the overnight session before that day's open).
 
     Each CSV needs a header with a time column (time, datetime, timestamp or
     date) and open, high, low, close; volume is optional. Timestamps are bar
@@ -101,9 +103,15 @@ def load_sessions(paths, data_tz: str = "UTC", local_tz: str = "America/New_York
                 if not row:
                     continue
                 t = to_local(row[it].strip())
-                if not t0 <= t.time() < t1:
+                day = t.date()
+                if t0 <= t1:
+                    if not t0 <= t.time() < t1:
+                        continue
+                elif t.time() >= t0:
+                    day += timedelta(days=1)
+                elif t.time() >= t1:
                     continue
-                bars = days.setdefault(t.date(), {})
+                bars = days.setdefault(day, {})
                 if t not in bars:
                     bars[t] = Bar(t, float(row[io]), float(row[ih]), float(row[il]),
                                   float(row[ic]), float(row[iv]) if iv is not None and row[iv] else 0.0)
@@ -117,7 +125,7 @@ class Session:
     """One session's bars plus look-back measures, computed once per window
     length and shared by every filter."""
 
-    def __init__(self, bars: list[Bar], mean: str = "vwap"):
+    def __init__(self, bars: list[Bar], mean: str = "vwap", prev_close: float | None = None):
         self.bars = bars
         self._windows: dict[int, tuple] = {}
         kind, _, n = mean.partition(":")
@@ -126,8 +134,14 @@ class Session:
         elif kind == "sma":
             n = int(n or 30)
             self.mean, self.mean_ready = self._sma(n), n - 1
+        elif kind == "open":
+            self.mean, self.mean_ready = [bars[0].o] * len(bars), 0
+        elif kind == "prev":
+            # The previous session's last close; no signals without one.
+            self.mean = [bars[0].o if prev_close is None else prev_close] * len(bars)
+            self.mean_ready = len(bars) if prev_close is None else 0
         else:
-            raise ValueError(f"unknown mean {mean!r}; use vwap or sma:N")
+            raise ValueError(f"unknown mean {mean!r}; use vwap, sma:N, open or prev")
 
     def _vwap(self) -> list[float]:
         weighted = any(b.v > 0 for b in self.bars)
@@ -148,6 +162,14 @@ class Session:
                 total -= self.bars[i - n].c
             out.append(total / min(i + 1, n))
         return out
+
+    def opening_range(self, n: int) -> tuple[float, float]:
+        """High and low of the first n bars."""
+        key = -n
+        if key not in self._windows:
+            first = self.bars[:n]
+            self._windows[key] = (max(b.h for b in first), min(b.l for b in first))
+        return self._windows[key]
 
     def window(self, n: int):
         """Rolling n-bar high, low, sum of true ranges and sum of |close
@@ -268,19 +290,38 @@ class Far:
 
 
 @dataclass(frozen=True)
+class Breakout:
+    """Opening-range breakout: after the first n bars, the close is outside
+    their high-low range. With --side follow and --mean open, the trade goes
+    the way of the break; --max-per-day 1 takes only the first."""
+    n: int = 30
+
+    @property
+    def lookback(self) -> int:
+        return self.n + 1
+
+    def ok(self, s: Session, i: int, stop: float) -> bool:
+        hi, lo = s.opening_range(self.n)
+        return i >= self.n and not lo <= s.bars[i].c <= hi
+
+
+@dataclass(frozen=True)
 class Clock:
-    """Only between `start` and `end` local time (HHMM, e.g. 1130 to 1400)."""
+    """Only between `start` and `end` local time (HHMM, e.g. 1130 to 1400;
+    1800 to 0200 wraps midnight)."""
     start: int = 1130
     end: int = 1400
     lookback = 1
 
     def ok(self, s: Session, i: int, stop: float) -> bool:
-        t = s.bars[i].t
-        return self.start <= t.hour * 100 + t.minute < self.end
+        now = s.bars[i].t.hour * 100 + s.bars[i].t.minute
+        if self.start <= self.end:
+            return self.start <= now < self.end
+        return now >= self.start or now < self.end
 
 
 FILTERS = {"all": All, "range": Range, "chop": Chop, "er": Efficiency,
-           "near": Near, "far": Far, "time": Clock}
+           "near": Near, "far": Far, "orb": Breakout, "time": Clock}
 
 
 def parse_filters(spec: str) -> list:
@@ -322,7 +363,7 @@ class Config:
     pct: bool = False
     rr: float = 0.2               # target / stop
     side: str = "fade"            # fade (toward the mean), follow (away from it), long, short or both
-    mean: str = "vwap"            # vwap or sma:N, for near, far, fade and follow
+    mean: str = "vwap"            # vwap, sma:N, open or prev (last close), for near, far, fade, follow
     through: float = 0.25         # the target fills only if price trades this far past it
     last_entry: str = "15:30"     # no new signals after this local time
     max_per_day: int = 0          # 0 = no limit
@@ -348,7 +389,7 @@ class Trade:
 def run_trade(bars: list[Bar], j: int, side: int, stop: float, cfg: Config) -> tuple[Trade, int]:
     """Enter at the open of bars[j] and walk forward. Returns the trade and
     the index of the bar it closed in."""
-    entry, day = bars[j].o, bars[j].t.date()
+    entry, day = bars[j].o, bars[-1].t.date()    # the session's day, even overnight
     target = cfg.rr * stop
     stop_px = entry - side * stop
     tgt_px = entry + side * target
@@ -381,11 +422,14 @@ def backtest(sessions: list[list[Bar]], filters: list, cfg: Config) -> list[Trad
     warmup = max((f.lookback for f in filters), default=1) - 1
     uses_mean = cfg.side in ("fade", "follow") or any(isinstance(f, (Near, Far)) for f in filters)
     trades: list[Trade] = []
+    prev_close = None
     for bars in sessions:
-        s = Session(bars, cfg.mean)
+        s = Session(bars, cfg.mean, prev_close)
+        prev_close = bars[-1].c
+        cutoff = datetime.combine(bars[-1].t.date(), last_entry)
         taken, i = 0, max(warmup, s.mean_ready if uses_mean else 0)
         while i < len(bars) - 1:
-            if bars[i].t.time() > last_entry or (cfg.max_per_day and taken >= cfg.max_per_day):
+            if bars[i].t > cutoff or (cfg.max_per_day and taken >= cfg.max_per_day):
                 break
             stop = cfg.stop_points(bars[i].c)
             if not all(f.ok(s, i, stop) for f in filters):

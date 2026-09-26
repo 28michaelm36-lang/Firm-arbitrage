@@ -187,7 +187,7 @@ def cmd_backtest(args):
     max_minis = program.evaluation.max_contracts if program else math.inf
     instrument = INSTRUMENTS[args.instrument].with_overrides(args.round_turn)
 
-    first, last = sessions[0][0].t.date(), sessions[-1][0].t.date()
+    first, last = sessions[0][-1].t.date(), sessions[-1][-1].t.date()
     split = date.fromisoformat(args.split) if args.split else None
     span = lambda a, b: f"{a:%Y-%m}..{b:%Y-%m}"
     periods = [(span(first, last), lambda d: True)]
@@ -307,11 +307,13 @@ def build_parser():
     b.add_argument("--reward", type=float, default=400.0)
     b.add_argument("--side", default="fade", choices=("fade", "follow", "long", "short", "both"),
                    help="fade trades toward the mean, follow away from it")
-    b.add_argument("--mean", default="vwap", help="session vwap, or sma:N")
+    b.add_argument("--mean", default="vwap",
+                   help="reference level: session vwap, sma:N, open, or prev (previous close)")
     b.add_argument("--through", type=float, default=0.25,
                    help="points price must trade past the target to fill it")
     b.add_argument("--split", help="report before and after this date (YYYY-MM-DD) separately")
-    b.add_argument("--last-entry", default="15:30", help="no new trades after this local time")
+    b.add_argument("--last-entry", default="15:30",
+                   help="no new trades after this local time on the session's last day")
     b.add_argument("--max-per-day", type=int, default=0, help="0 = no limit")
     b.add_argument("--cooldown", type=int, default=0, help="bars to wait after each exit")
     b.add_argument("--data-tz", default="UTC", help="time zone of timestamps without an offset")

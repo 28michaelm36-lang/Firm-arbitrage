@@ -48,7 +48,9 @@ python -m propfirm backtest "data/NAS100/*.csv" --stop 0.5% --split 2017-01-01 \
   `datetime`, `timestamp` or `date`) plus `open`, `high`, `low` and `close`.
   `volume` is optional. Timestamps are bar starts, in `--data-tz` (UTC by
   default) or ISO 8601 with an offset. Only the 09:30–16:00 New York session is
-  used; change it with `--session-start`, `--session-end` and `--tz`.
+  used; change it with `--session-start`, `--session-end` and `--tz`. A start
+  after the end crosses midnight: `--session-start 18:00 --session-end 09:30`
+  is the overnight session.
 - **Filters** (`--filters`, several at once; `+` means all must pass). Sizes
   are in stops:
 
@@ -58,13 +60,15 @@ python -m propfirm backtest "data/NAS100/*.csv" --stop 0.5% --split 2017-01-01 \
   | `range:n=30,width=1` | the last n bars span at most `width` stops (calm) |
   | `chop:n=30,above=61.8` | the choppiness index over n bars is at least `above` |
   | `er:n=30,below=0.2` | Kaufman's efficiency ratio over n bars is at most `below` |
-  | `near:within=0.1` | the close is within `within` stops of the session mean |
-  | `far:beyond=1` | the close is at least `beyond` stops from the session mean |
+  | `near:within=0.1` | the close is within `within` stops of the mean (`--mean`) |
+  | `far:beyond=1` | the close is at least `beyond` stops from the mean |
+  | `orb:n=30` | after the first n bars, the close is outside their range |
   | `time:start=1130,end=1400` | the bar closes inside the time window |
 
 - **Side.** `fade` (the default) trades toward the mean, `follow` away from it,
-  and `long`, `short` and `both` ignore it. `--mean` is the session VWAP or
-  `sma:N`.
+  and `long`, `short` and `both` ignore it. `--mean` is the session VWAP,
+  `sma:N`, the session's `open`, or `prev`, the previous session's close (for
+  gaps and the day's move).
 - **Stop.** In points (`--stop 40`) or as a share of price (`--stop 0.5%`).
   The target is the stop times `--reward / --risk`.
 - **Fills.** Entry is at the next bar's open. The target fills only if price
@@ -189,6 +193,9 @@ data. Calm filters do nothing, choppiness filters hurt, and "near the mean"
 helps by about a point: enough to recover some of the slight intraday trend,
 not enough to reach 83.3%, and far from the 84–86% that pays for costs. On
 these programs, use asymmetry2, or asymmetry1 only if it has a measured edge.
+
+Other negative-RR ideas tested with the same tool, including the ORB that
+asymmetry1 trades, are in [negative-rr-ideas.md](negative-rr-ideas.md).
 
 ## Caveats
 

@@ -7,8 +7,8 @@ import tempfile
 import unittest
 from datetime import datetime, timedelta
 
-from propfirm.backtest import (All, Bar, Config, Far, Near, Range, backtest, evaluate,
-                               load_sessions, parse_filters, run_trade)
+from propfirm.backtest import (All, Bar, Breakout, Clock, Config, Far, Near, Range, Session,
+                               backtest, evaluate, load_sessions, parse_filters, run_trade)
 from propfirm.cli import main
 from propfirm.instruments import INSTRUMENTS
 
@@ -71,6 +71,23 @@ class Trades(unittest.TestCase):
         self.assertEqual(fade[0].entry_time, follow[0].entry_time)
         self.assertEqual(fade[0].side, -follow[0].side)
 
+    def test_opening_range_breakout(self):
+        rows = [(100, 101, 99, 100)] * 3 + [(100, 100.5, 99.5, 100), (100, 102, 100, 101.5),
+                                             (101.5, 103, 101, 102.5)]
+        s = Session(bars(*rows), mean="open")
+        orb = Breakout(n=3)
+        self.assertEqual([orb.ok(s, i, 1.0) for i in range(5)], [False] * 4 + [True])
+        trades = backtest([s.bars], [orb], Config(stop=5.0, side="follow", mean="open", through=0.0))
+        self.assertEqual((trades[0].side, trades[0].outcome), (1, "win"))   # broke up: long
+
+    def test_prev_close_and_clock(self):
+        s = Session(bars((100, 101, 99, 100)), mean="prev", prev_close=95.0)
+        self.assertEqual(s.mean, [95.0])
+        self.assertEqual(Session(bars((100, 101, 99, 100)), mean="prev").mean_ready, 1)
+        overnight = Session([Bar(datetime(2024, 1, 1, 23, 0), 1, 1, 1, 1)])
+        self.assertTrue(Clock(start=1800, end=200).ok(overnight, 0, 1.0))
+        self.assertFalse(Clock(start=1800, end=2200).ok(overnight, 0, 1.0))
+
     def test_filters_parse(self):
         f = parse_filters("range:n=60,width=0.75+near:within=0.1")
         self.assertEqual(f, [Range(n=60, width=0.75), Near(within=0.1)])
@@ -115,6 +132,20 @@ class Loading(unittest.TestCase):
             sessions = load_sessions([path])
         self.assertEqual([[b.c for b in s] for s in sessions], [[2.0, 6.0], [3.0, 5.0]])
         self.assertEqual(sessions[1][0].t, datetime(2024, 3, 11, 9, 30))
+
+    def test_overnight_session(self):
+        rows = ["time,open,high,low,close",
+                "2024-03-10 21:59:00,1,1,1,1",      # Sunday 17:59 EDT: closed
+                "2024-03-10 22:00:00,2,2,2,2",      # Sunday 18:00: Monday's overnight session
+                "2024-03-11 04:00:00,3,3,3,3",      # Monday 00:00
+                "2024-03-11 13:29:00,4,4,4,4",      # Monday 09:29
+                "2024-03-11 13:30:00,5,5,5,5"]      # Monday 09:30: regular session
+        with tempfile.TemporaryDirectory() as d:
+            path = os.path.join(d, "bars.csv")
+            with open(path, "w") as f:
+                f.write("\n".join(rows))
+            sessions = load_sessions([path], start="18:00", end="09:30")
+        self.assertEqual([[b.c for b in s] for s in sessions], [[2.0, 3.0, 4.0]])
 
     def test_cli(self):
         sessions = synthetic(random.Random(3), days=5, step=1.0)

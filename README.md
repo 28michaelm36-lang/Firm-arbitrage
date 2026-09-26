@@ -23,7 +23,9 @@ It contains:
   when the market looks range-bound (calm, choppy, near its mean). Backtested
   bar by bar on 1-minute data (`backtest` command). On NAS100 and S&P 500 data
   from 2012 to 2020, no filter lifted the win rate above the 83.3% of a fair
-  game. See [docs/asymmetry4.md](docs/asymmetry4.md).
+  game. See [docs/asymmetry4.md](docs/asymmetry4.md). Other negative-RR ideas
+  (the ORB itself, gaps, late-day momentum, the overnight session) are tested
+  in [docs/negative-rr-ideas.md](docs/negative-rr-ideas.md).
 
 Pure Python 3.11+, standard library only.
 
