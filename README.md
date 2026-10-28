@@ -19,6 +19,11 @@ It contains:
 - **manual evaluations**: take your real pass rate as given, test it against
   luck, and value the funded side (`manual` command). See
   [docs/manual-evaluations.md](docs/manual-evaluations.md).
+- **published intraday strategies**: the noise-area breakout, last-half-hour
+  momentum and the 5-minute ORB, from the finance literature at their
+  published parameters, backtested on 1-minute Nasdaq-100 bars and replayed
+  through the prop-firm programs (`python -m intraday`). See
+  [docs/intraday-strategies.md](docs/intraday-strategies.md).
 
 Pure Python 3.11+, standard library only.
 
@@ -47,6 +52,11 @@ python -m propfirm manual configs/programs/intraday_trailing_50k.toml --pass-rat
 
 # Exact optimal staking to pass (dynamic program), and whether bold play is optimal for you
 python -m propfirm optimize --program configs/programs/static_50k.toml --winrate 0.5
+
+# Published intraday strategies on 1-minute bars, and their prop-firm replay
+python -m intraday inspect data/nq_1min.csv
+python -m intraday backtest data/nq_1min.csv --by-year
+python -m intraday propfirm data/nq_1min.csv --strategies noise+lasthalf+orb --sizes 2MNQ,vol1000
 
 # Tests
 python -m unittest discover -s tests -t .
@@ -133,6 +143,12 @@ propfirm/
   instruments.py  NQ / MNQ / ES / MES with default all-in costs
   stats.py        binomial checks for a real track record
   cli.py          simulate | compare | manual | optimize
+intraday/
+  data.py         1-minute CSVs, regular sessions, contract-roll adjustment
+  strategies.py   noise area, last half hour, 5-minute ORB; fills and costs
+  metrics.py      Sharpe, drawdown, trades per week, by year
+  replay.py       real fills through a program's floor, loss limit and payouts
+  cli.py          inspect | backtest | propfirm
 configs/programs/ illustrative program rules
 docs/             strategy write-ups
 tests/            unittest suite, including the theory checks above
