@@ -1,0 +1,182 @@
+# Futures inefficiency scanner: python -m scanner serve
+# Watchlist, signal parameters, news scoring and alert delivery.
+# See docs/market-scanner.md for what each number does.
+
+[data]
+range = "2y"                # daily history to load from Yahoo (1y, 2y, 5y, ...)
+refresh_minutes = 15
+alert_on_live_bar = true    # alert on the forming bar (marked provisional); false = settled bars only
+
+[efficiency]
+lag = 5                     # VR(q): q-day vs 1-day variance
+window = 500                # daily returns in the test
+z_threshold = 1.96
+
+[mean_reversion]
+lookback = 20
+entry_z = 2.0
+
+[continuation]
+channel = 20
+
+[record]
+horizon_days = 5
+atr_days = 20
+
+[news]
+refresh_minutes = 10
+google_news = true
+feeds = [
+  "https://farmdocdaily.illinois.edu/feed",
+]
+min_score = 4
+max_age_hours = 36
+impact_terms = [
+  "USDA", "WASDE", "crop progress", "EPA", "RVO", "mandate", "tariff", "export ban",
+  "export tax", "quota", "embargo", "sanctions", "drought", "frost", "freeze", "flood",
+  "heat wave", "hurricane", "El Nino", "La Nina", "strike", "outbreak", "disease",
+  "record", "surge", "plunge", "soar", "slump", "shortage", "glut", "CFTC", "subsidy",
+]
+up_words = ["surge", "soar", "jump", "rally", "rise", "gain", "climb", "higher", "tight", "shortage", "strong demand"]
+down_words = ["plunge", "slump", "drop", "fall", "slide", "sink", "lower", "glut", "surplus", "weak demand"]
+
+[alerts]
+webhook_url = ""            # e.g. "https://ntfy.sh/<a-long-random-topic>" or a Slack/Discord webhook
+webhook_format = "ntfy"     # json | ntfy | slack | discord
+
+# ---- Grains and oilseeds (CBOT) -------------------------------------------
+
+[[markets]]
+code = "ZL"
+symbol = "ZL=F"
+name = "Soybean oil"
+sector = "Grains & oilseeds"
+keywords = ["soybean oil", "soyoil", "soy oil", "biodiesel", "renewable diesel", "biofuel",
+            "Renewable Fuel Standard", "RVO", "45Z", "palm oil", "vegetable oil", "soybean crush"]
+news_query = '"soybean oil" OR soyoil OR biodiesel OR "renewable diesel" OR "palm oil"'
+
+[[markets]]
+code = "ZM"
+symbol = "ZM=F"
+name = "Soybean meal"
+sector = "Grains & oilseeds"
+keywords = ["soybean meal", "soymeal", "soy meal", "soybean crush", "Argentina crush"]
+news_query = '"soybean meal" OR soymeal OR "soybean crush"'
+
+[[markets]]
+code = "ZS"
+symbol = "ZS=F"
+name = "Soybeans"
+sector = "Grains & oilseeds"
+keywords = ["soybeans", "soybean futures", "soybean exports", "soybean prices", "soybean crop", "oilseed"]
+news_query = 'soybeans futures OR "soybean exports" OR "soybean prices"'
+
+[[markets]]
+code = "ZO"
+symbol = "ZO=F"
+name = "Oats"
+sector = "Grains & oilseeds"
+keywords = ["oats", "oat"]
+news_query = 'oats futures OR "oat prices" OR "oat crop"'
+
+[[markets]]
+code = "ZR"
+symbol = "ZR=F"
+name = "Rough rice"
+sector = "Grains & oilseeds"
+keywords = ["rice", "rough rice"]
+news_query = '"rice prices" OR "rice exports" OR "rough rice"'
+
+[[markets]]
+code = "KE"
+symbol = "KE=F"
+name = "KC HRW wheat"
+sector = "Grains & oilseeds"
+keywords = ["wheat", "hard red winter", "HRW", "winter wheat"]
+news_query = '"wheat futures" OR "hard red winter" OR "winter wheat"'
+
+# ---- Livestock (CME) -------------------------------------------------------
+
+[[markets]]
+code = "HE"
+symbol = "HE=F"
+name = "Lean hogs"
+sector = "Livestock"
+keywords = ["lean hogs", "hog", "pork", "swine", "African swine fever"]
+news_query = '"lean hogs" OR "hog futures" OR "pork prices" OR "African swine fever"'
+
+[[markets]]
+code = "LE"
+symbol = "LE=F"
+name = "Live cattle"
+sector = "Livestock"
+keywords = ["cattle", "live cattle", "beef", "screwworm", "packer"]
+news_query = '"live cattle" OR "cattle futures" OR "beef prices" OR screwworm'
+
+[[markets]]
+code = "GF"
+symbol = "GF=F"
+name = "Feeder cattle"
+sector = "Livestock"
+keywords = ["feeder cattle", "feeders", "cattle", "screwworm"]
+news_query = '"feeder cattle" OR "cattle futures" OR screwworm'
+
+# ---- Softs (ICE US) --------------------------------------------------------
+
+[[markets]]
+code = "CC"
+symbol = "CC=F"
+name = "Cocoa"
+sector = "Softs"
+keywords = ["cocoa", "Ivory Coast", "Cote d'Ivoire", "Ghana", "cocoa grindings", "chocolate"]
+news_query = 'cocoa prices OR "cocoa futures" OR "cocoa grindings"'
+
+[[markets]]
+code = "KC"
+symbol = "KC=F"
+name = "Coffee"
+sector = "Softs"
+keywords = ["coffee", "arabica", "Brazil coffee"]
+news_query = '"coffee prices" OR "arabica" OR "coffee futures"'
+
+[[markets]]
+code = "CT"
+symbol = "CT=F"
+name = "Cotton"
+sector = "Softs"
+keywords = ["cotton"]
+news_query = '"cotton prices" OR "cotton futures" OR "cotton crop"'
+
+[[markets]]
+code = "SB"
+symbol = "SB=F"
+name = "Sugar"
+sector = "Softs"
+keywords = ["sugar", "sugarcane", "cane", "UNICA", "ethanol"]
+news_query = '"sugar prices" OR "raw sugar" OR UNICA OR "sugar futures"'
+
+[[markets]]
+code = "OJ"
+symbol = "OJ=F"
+name = "Orange juice"
+sector = "Softs"
+keywords = ["orange juice", "oranges", "citrus", "citrus greening"]
+news_query = '"orange juice" OR "citrus crop" OR "Florida oranges"'
+
+# ---- Metals (NYMEX) --------------------------------------------------------
+
+[[markets]]
+code = "PA"
+symbol = "PA=F"
+name = "Palladium"
+sector = "Metals"
+keywords = ["palladium", "Norilsk", "autocatalyst"]
+news_query = 'palladium prices OR "palladium futures" OR Norilsk'
+
+[[markets]]
+code = "PL"
+symbol = "PL=F"
+name = "Platinum"
+sector = "Metals"
+keywords = ["platinum", "autocatalyst", "PGM"]
+news_query = 'platinum prices OR "platinum futures" OR "platinum supply"'

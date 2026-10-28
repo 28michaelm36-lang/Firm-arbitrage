@@ -1,0 +1,84 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Futures Scanner</title>
+<meta name="description" content="Futures inefficiency scanner: regimes, mean-reversion and continuation signals, and news alerts.">
+<link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 16 16'%3E%3Cpath d='M1 12 5 7l3 3 7-8' fill='none' stroke='%232a78d6' stroke-width='2' stroke-linecap='round' stroke-linejoin='round'/%3E%3C/svg%3E">
+<link rel="stylesheet" href="/style.css">
+</head>
+<body>
+<header class="top">
+  <div class="brand">
+    <h1>Futures inefficiency scanner</h1>
+    <p id="source" class="muted">Loading…</p>
+  </div>
+  <div class="actions">
+    <span id="status" class="status" role="status">Connecting…</span>
+    <button id="refresh" type="button">Refresh now</button>
+    <button id="notify" type="button" hidden>Enable notifications</button>
+  </div>
+</header>
+
+<div id="demo-banner" class="banner" hidden>
+  <strong>Demo mode.</strong> Synthetic prices and headlines, generated locally. Nothing on this page is market data.
+</div>
+
+<main class="layout">
+  <section class="card markets" aria-labelledby="markets-title">
+    <div class="section-head">
+      <h2 id="markets-title">Markets</h2>
+      <p class="muted small" id="markets-hint">Ranked by distance from a random walk.</p>
+    </div>
+    <div class="filters" role="toolbar" aria-label="Filter markets">
+      <div id="sectors" class="chips"></div>
+      <label class="check"><input type="checkbox" id="signals-only"> Signals today only</label>
+    </div>
+    <div class="table-wrap">
+      <table id="markets">
+        <thead>
+          <tr>
+            <th scope="col">Market</th>
+            <th scope="col" class="num">Last</th>
+            <th scope="col">Regime <span class="muted">z*</span></th>
+            <th scope="col" class="col-stretch">Stretch <span class="muted">z</span></th>
+            <th scope="col" class="col-channel">Channel</th>
+            <th scope="col" class="col-today">Today</th>
+            <th scope="col" class="col-record">Record</th>
+            <th scope="col" class="num col-news">News</th>
+          </tr>
+        </thead>
+        <tbody></tbody>
+      </table>
+    </div>
+    <p class="muted small legend-note" id="table-note"></p>
+  </section>
+
+  <section class="card detail" id="detail" aria-live="polite">
+    <p class="muted">Select a market to see its chart, signals and news.</p>
+  </section>
+
+  <aside class="card alerts" aria-labelledby="alerts-title">
+    <div class="section-head">
+      <h2 id="alerts-title">Alerts</h2>
+      <div class="tabs" role="tablist" aria-label="Alert type">
+        <button type="button" role="tab" data-kind="" aria-selected="true">All</button>
+        <button type="button" role="tab" data-kind="signal" aria-selected="false">Signals</button>
+        <button type="button" role="tab" data-kind="news" aria-selected="false">News</button>
+      </div>
+    </div>
+    <p id="news-errors" class="muted small" hidden></p>
+    <ol id="alerts" class="alert-list"></ol>
+  </aside>
+</main>
+
+<footer class="muted small">
+  Signals are mechanical and are not trading advice. Records ignore costs and slippage. Front-month
+  series are not roll-adjusted, so a contract roll can fake a signal. Method: docs/market-scanner.md.
+</footer>
+
+<div id="toast" class="toast" role="status" aria-live="polite" hidden></div>
+<script src="/app.js"></script>
+</body>
+</html>

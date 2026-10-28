@@ -19,6 +19,11 @@ It contains:
 - **manual evaluations**: take your real pass rate as given, test it against
   luck, and value the funded side (`manual` command). See
   [docs/manual-evaluations.md](docs/manual-evaluations.md).
+- **futures inefficiency scanner**: a local website that watches thinly traded
+  futures (soybean oil, meal, oats, rice, livestock, softs, PGMs). It ranks
+  them by how far they are from a random walk, using a variance-ratio test. It
+  alerts when a mean-reversion or breakout signal fires, or when related news
+  breaks. See [docs/market-scanner.md](docs/market-scanner.md).
 
 Pure Python 3.11+, standard library only.
 
@@ -47,6 +52,10 @@ python -m propfirm manual configs/programs/intraday_trailing_50k.toml --pass-rat
 
 # Exact optimal staking to pass (dynamic program), and whether bold play is optimal for you
 python -m propfirm optimize --program configs/programs/static_50k.toml --winrate 0.5
+
+# Futures scanner website on http://127.0.0.1:8000 (add --demo to run offline on synthetic data)
+python -m scanner serve
+python -m scanner scan --news          # one-shot report in the terminal
 
 # Tests
 python -m unittest discover -s tests -t .
@@ -133,7 +142,18 @@ propfirm/
   instruments.py  NQ / MNQ / ES / MES with default all-in costs
   stats.py        binomial checks for a real track record
   cli.py          simulate | compare | manual | optimize
+scanner/
+  data.py         Yahoo Finance daily bars, synthetic demo bars
+  efficiency.py   Lo-MacKinlay variance ratio: mean-reverting, trending or random walk
+  signals.py      mean-reversion and breakout triggers, and each one's past record
+  news.py         RSS/Atom headlines scored against each market's keywords
+  engine.py       scan cycle: new triggers and headlines -> alerts
+  store.py        SQLite: alerts are stored once, so they never repeat
+  alerts.py       webhook delivery (ntfy, Slack, Discord, JSON)
+  server.py       JSON API, the page in static/, and the background scan loop
+  cli.py          serve | scan
 configs/programs/ illustrative program rules
+configs/scanner.toml  scanner watchlist, signal parameters, news keywords, alerts
 docs/             strategy write-ups
 tests/            unittest suite, including the theory checks above
 ```
