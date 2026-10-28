@@ -4,6 +4,7 @@ import random
 import statistics
 import tempfile
 import unittest
+import zipfile
 from datetime import date, datetime, timedelta
 
 from intraday.data import (Bar, Day, detect_label, detect_rolls, read_bars, rescale, sessions,
@@ -84,6 +85,49 @@ class TestReading(unittest.TestCase):
         self.assertEqual(info.duplicates, 1)
         self.assertEqual(bars[-1].c, 1.0)
 
+    def test_excel_workbook(self):
+        """A first sheet as Excel writes it: shared strings for the header,
+        timestamps as serial day counts, a blank cell skipped."""
+        ns = 'xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main"'
+        rel = 'xmlns:r="http://schemas.openxmlformats.org/officeDocument/2006/relationships"'
+        header = ["timestamp ET", "open", "high", "low", "close", "volume"]
+        strings = "".join(f"<si><t>{h}</t></si>" for h in header)
+        serial = (date(2022, 12, 27) - date(1899, 12, 30)).days + 9.5 / 24
+        cells = "".join(f'<c r="{c}1" t="s"><v>{i}</v></c>' for i, c in enumerate("ABCDEF"))
+        rows = [f'<row r="1">{cells}</row>']
+        for k in range(3):
+            t = serial + k / 1440
+            rows.append(f'<row r="{k + 2}"><c r="A{k + 2}"><v>{t!r}</v></c>'
+                        f'<c r="B{k + 2}"><v>{100 + k}</v></c><c r="C{k + 2}"><v>{101 + k}</v></c>'
+                        f'<c r="D{k + 2}"><v>{99 + k}</v></c><c r="E{k + 2}"><v>{100.5 + k}</v></c>'
+                        f'<c r="F{k + 2}"><v>{10 * (k + 1)}</v></c></row>')
+        path = os.path.join(tempfile.mkdtemp(), "nq.xlsx")
+        with zipfile.ZipFile(path, "w") as z:
+            z.writestr("xl/workbook.xml", f'<workbook {ns} {rel}><sheets>'
+                       f'<sheet name="NQ" sheetId="1" r:id="rId1"/></sheets></workbook>')
+            z.writestr("xl/_rels/workbook.xml.rels",
+                       '<Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships">'
+                       '<Relationship Id="rId1" Target="worksheets/sheet1.xml"/></Relationships>')
+            z.writestr("xl/sharedStrings.xml", f"<sst {ns}>{strings}</sst>")
+            z.writestr("xl/worksheets/sheet1.xml",
+                       f"<worksheet {ns}><sheetData>{''.join(rows)}</sheetData></worksheet>")
+        self.addCleanup(os.unlink, path)
+        bars, info = read_bars([path], label="start")
+        self.assertEqual(info.data_tz, "America/New_York")
+        self.assertEqual([b.t for b in bars], [datetime(2022, 12, 27, 9, 30 + k) for k in range(3)])
+        self.assertEqual((bars[2].o, bars[2].c, bars[2].v), (102.0, 102.5, 30.0))
+
+    def test_bom_and_zipped_csv(self):
+        text = "\ufefftimestamp ET,open,high,low,close,volume\n2023-01-03 09:30:00,1,2,0.5,1.5,7\n"
+        path = self._csv(text)
+        bars, info = read_bars([path], label="start")
+        self.assertEqual((info.data_tz, bars[0].c), ("America/New_York", 1.5))
+        zipped = path + ".zip"
+        with zipfile.ZipFile(zipped, "w") as z:
+            z.write(path, "nq.csv")
+        self.addCleanup(os.unlink, zipped)
+        self.assertEqual(read_bars([zipped], label="start")[0], bars)
+
     def test_end_labelled_bars_are_detected(self):
         rows = ["time,open,high,low,close,volume"]
         for day in range(2, 6):
@@ -95,6 +139,9 @@ class TestReading(unittest.TestCase):
         self.assertEqual(bars[0].t.minute, 27)
         start_bars = [Bar(b.t, 1, 1, 1, 1, b.v) for b in bars]
         self.assertEqual(detect_label(start_bars), "start")
+        # no spike at all: keep the default
+        flat = [Bar(b.t, 1, 1, 1, 1, 10 + (b.t.minute == 31)) for b in bars]
+        self.assertEqual(detect_label(flat), "start")
 
 
 class TestSessions(unittest.TestCase):

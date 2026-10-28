@@ -176,8 +176,10 @@ re-tuned.
 
 ## Running it
 
-Put the Kaggle CSV (or any 1-minute CSV with a time column and open, high,
-low, close, volume) in `data/`, which git ignores:
+Put the bars in `data/`, which git ignores. Any 1-minute file with a time
+column and open, high, low, close and volume works: a CSV, a `.zip` holding
+one, or an Excel workbook (`.xlsx`, first sheet; Excel's serial-number
+timestamps are converted). A million-row workbook loads in about 30 seconds.
 
 ```bash
 # How the file was read: zone (from 'timestamp ET'), bar labelling, contract rolls

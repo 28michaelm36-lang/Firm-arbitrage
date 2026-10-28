@@ -1,4 +1,5 @@
-"""1-minute bars: loading CSVs, regular-session days, and contract rolls.
+"""1-minute bars: loading CSV or Excel files, regular-session days, and
+contract rolls.
 
 Everything downstream works on `Day` objects: the 09:30-16:00 New York
 session of one date, one bar per minute from 09:30, plus the previous
@@ -9,10 +10,13 @@ session's close. Bars are labelled by their start time, so the bar labelled
 from __future__ import annotations
 
 import csv
+import io
 import math
 import statistics
+import zipfile
 from dataclasses import dataclass, field
 from datetime import date, datetime, time, timedelta
+from xml.etree import ElementTree
 from zoneinfo import ZoneInfo
 
 NEW_YORK = ZoneInfo("America/New_York")
@@ -126,9 +130,13 @@ def _time_column(header: list[str]) -> tuple[int | None, str | None]:
     return _find(header, _TIME_NAMES), None
 
 
+_EXCEL_EPOCH = datetime(1899, 12, 30)
+
+
 class _TimeParser:
     """Turns timestamp strings into naive New York datetimes. Handles ISO 8601
-    (with or without an offset), US-style M/D/YYYY H:MM[:SS] [AM|PM] and epoch
+    (with or without an offset), US-style M/D/YYYY H:MM[:SS] [AM|PM], Excel
+    serial dates (day counts below 10**6, in the file's zone) and epoch
     seconds, milliseconds or nanoseconds. Zone offsets are looked up once per
     hour, since they only change on the hour."""
 
@@ -153,6 +161,8 @@ class _TimeParser:
         s = s.strip()
         if s.replace(".", "", 1).isdigit():
             x = float(s)
+            if x < 1e6:
+                return self._localise(_EXCEL_EPOCH + timedelta(seconds=round(x * 86400)))
             scale = 1e9 if x > 1e17 else 1e3 if x > 1e11 else 1.0
             utc = datetime.fromtimestamp(x / scale, ZoneInfo("UTC"))
             return utc.astimezone(NEW_YORK).replace(tzinfo=None)
@@ -180,8 +190,97 @@ class _TimeParser:
                         parts[2] if len(parts) > 2 else 0)
 
 
+_XL = "{http://schemas.openxmlformats.org/spreadsheetml/2006/main}"
+_XL_REL = "{http://schemas.openxmlformats.org/officeDocument/2006/relationships}"
+
+
+def _first_sheet(z: zipfile.ZipFile) -> str:
+    names = z.namelist()
+    try:
+        sheet = ElementTree.fromstring(z.read("xl/workbook.xml")).find(f"{_XL}sheets/{_XL}sheet")
+        rid = sheet.get(f"{_XL_REL}id")
+        rels = ElementTree.fromstring(z.read("xl/_rels/workbook.xml.rels"))
+        target = next(r.get("Target") for r in rels if r.get("Id") == rid)
+        path = target.lstrip("/") if target.startswith("/") else "xl/" + target
+        if path in names:
+            return path
+    except (KeyError, StopIteration, AttributeError, ElementTree.ParseError):
+        pass
+    sheets = sorted(n for n in names if n.startswith("xl/worksheets/sheet"))
+    if not sheets:
+        raise ValueError("no worksheet in the .xlsx file")
+    return sheets[0]
+
+
+def _xlsx_rows(source):
+    """Rows of the first worksheet of an .xlsx file, as strings. Numbers come
+    as Excel stores them, so dates arrive as serial day counts."""
+    with zipfile.ZipFile(source) as z:
+        shared: list[str] = []
+        if "xl/sharedStrings.xml" in z.namelist():
+            with z.open("xl/sharedStrings.xml") as f:
+                for _, el in ElementTree.iterparse(f):
+                    if el.tag == _XL + "si":
+                        shared.append("".join(t.text or "" for t in el.iter(_XL + "t")))
+                        el.clear()
+        with z.open(_first_sheet(z)) as f:
+            parent = None
+            for event, el in ElementTree.iterparse(f, events=("start", "end")):
+                if event == "start":
+                    if el.tag == _XL + "sheetData":
+                        parent = el
+                    continue
+                if el.tag != _XL + "row":
+                    continue
+                row: list[str] = []
+                for c in el.iter(_XL + "c"):
+                    ref = c.get("r")
+                    if ref:
+                        col = 0
+                        for ch in ref:
+                            if not ch.isalpha():
+                                break
+                            col = col * 26 + ord(ch.upper()) - 64
+                        row.extend([""] * (col - 1 - len(row)))
+                    kind, v = c.get("t"), c.find(_XL + "v")
+                    if kind == "inlineStr":
+                        row.append("".join(t.text or "" for t in c.iter(_XL + "t")))
+                    elif v is None or v.text is None:
+                        row.append("")
+                    else:
+                        row.append(shared[int(v.text)] if kind == "s" else v.text)
+                yield row
+                if parent is not None:
+                    parent.clear()      # drop parsed rows: the sheet can have a million
+
+
+def _rows(path):
+    """Rows of strings from a CSV, a .zip holding a CSV or an .xlsx, or the
+    first sheet of an .xlsx."""
+    name = str(path).lower()
+    if name.endswith((".xlsx", ".xlsm")):
+        yield from _xlsx_rows(path)
+        return
+    if name.endswith(".zip"):
+        with zipfile.ZipFile(path) as z:
+            inner = [n for n in z.namelist() if not n.startswith("__MACOSX")]
+            csvs = [n for n in inner if n.lower().endswith((".csv", ".txt"))]
+            books = [n for n in inner if n.lower().endswith((".xlsx", ".xlsm"))]
+            if csvs:
+                with z.open(csvs[0]) as raw:
+                    yield from csv.reader(io.TextIOWrapper(raw, encoding="utf-8-sig", newline=""))
+            elif books:
+                yield from _xlsx_rows(io.BytesIO(z.read(books[0])))
+            else:
+                raise ValueError(f"{path}: no .csv or .xlsx inside")
+        return
+    with open(path, newline="", encoding="utf-8-sig") as f:
+        yield from csv.reader(f)
+
+
 def read_bars(paths, data_tz: str | None = None, label: str = "auto") -> tuple[list[Bar], LoadInfo]:
-    """Read 1-minute bar CSVs into one sorted list in New York time.
+    """Read 1-minute bar files (CSV, zipped CSV or .xlsx) into one sorted list
+    in New York time.
 
     Each file needs a header with a time column (timestamp, time, datetime or
     date, optionally followed by a zone such as 'timestamp ET') and open, high,
@@ -194,23 +293,23 @@ def read_bars(paths, data_tz: str | None = None, label: str = "auto") -> tuple[l
     info = LoadInfo()
     zones = set()
     for path in paths:
-        with open(path, newline="") as f:
-            reader = csv.reader(f)
-            header = [h.strip().lower() for h in next(reader)]
-            it, declared = _time_column(header)
-            io, ih, il, ic = (_find(header, (k, k[0])) for k in ("open", "high", "low", "close"))
-            iv = _find(header, ("volume", "vol", "v"))
-            if None in (it, io, ih, il, ic):
-                raise ValueError(f"{path}: need time, open, high, low and close columns, got {header}")
-            tz = data_tz or declared or "UTC"
-            zones.add(tz)
-            parse = _TimeParser(tz)
-            for row in reader:
-                if not row or not row[it].strip():
-                    continue
-                v = row[iv].strip() if iv is not None and iv < len(row) else ""
-                rows.append((parse(row[it]), float(row[io]), float(row[ih]), float(row[il]),
-                             float(row[ic]), float(v) if v else 0.0))
+        reader = _rows(path)
+        header = [h.strip().lower() for h in next(reader)]
+        it, declared = _time_column(header)
+        io_, ih, il, ic = (_find(header, (k, k[0])) for k in ("open", "high", "low", "close"))
+        iv = _find(header, ("volume", "vol", "v"))
+        if None in (it, io_, ih, il, ic):
+            raise ValueError(f"{path}: need time, open, high, low and close columns, got {header}")
+        need = max(it, io_, ih, il, ic)
+        tz = data_tz or declared or "UTC"
+        zones.add(tz)
+        parse = _TimeParser(tz)
+        for row in reader:
+            if len(row) <= need or not row[it].strip() or not row[ic].strip():
+                continue
+            v = row[iv].strip() if iv is not None and iv < len(row) else ""
+            rows.append((parse(row[it]), float(row[io_]), float(row[ih]), float(row[il]),
+                         float(row[ic]), float(v) if v else 0.0))
     info.rows = len(rows)
     info.data_tz = ", ".join(sorted(zones))
     rows.sort(key=lambda r: r[0])
@@ -237,7 +336,8 @@ def read_bars(paths, data_tz: str | None = None, label: str = "auto") -> tuple[l
 
 def detect_label(bars: list[Bar]) -> str:
     """'end' if the opening volume spike sits on the bar labelled 09:31 rather
-    than 09:30, i.e. timestamps mark when each bar closed."""
+    than 09:30, i.e. timestamps mark when each bar closed. Without a clear
+    spike (at least 1.5 times the bar before) the default is 'start'."""
     vol: dict[time, list[float]] = {time(9, 29): [], time(9, 30): [], time(9, 31): []}
     for b in bars:
         bucket = vol.get(b.t.time())
@@ -247,7 +347,8 @@ def detect_label(bars: list[Bar]) -> str:
     v29, v30, v31 = means[time(9, 29)], means[time(9, 30)], means[time(9, 31)]
     if min(v29, v30, v31) <= 0:
         return "start"
-    return "end" if v31 / v30 > v30 / v29 else "start"
+    at_open, after_open = v30 / v29, v31 / v30
+    return "end" if after_open > max(at_open, 1.5) else "start"
 
 
 # --- contract rolls ---------------------------------------------------------
