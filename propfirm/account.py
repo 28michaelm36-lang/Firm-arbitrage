@@ -67,6 +67,11 @@ class Account:
         trailing = self.drawdown.mode == "intraday_trailing"
         fl = Floor(self.floor, self.hwm, self.drawdown.amount if trailing else None, self.lock)
         out = simulate_bracket(rng, self.balance, fl, stop, reward, cost, tilt)
+        self.settle(out)
+        return out
+
+    def settle(self, out: Outcome) -> None:
+        """Book a finished trade, however it was resolved (simulated or on real bars)."""
         self.balance += out.pnl
         self.day_trades += 1
         self.hwm, self.floor = out.hwm, out.floor
@@ -77,7 +82,6 @@ class Account:
                 self.blown = True
             else:
                 self.day_over = True
-        return out
 
     def end_day(self) -> float | None:
         """Close the day. Returns the day's P&L if it was a trading day."""

@@ -1,4 +1,4 @@
-"""Command line: inspect | backtest | propfirm."""
+"""Command line: inspect | backtest | propfirm | signals | boldharvest."""
 from __future__ import annotations
 
 import argparse
@@ -6,12 +6,16 @@ import csv
 import glob
 import math
 import re
+import statistics
 import sys
 from dataclasses import replace
 from datetime import date
 
+from propfirm.policies import parse_policy
 from propfirm.rules import load_program
 
+from .boldharvest import (Settings, Tape, all_runs, campaign, parse_signal, study,
+                          summarize_runs)
 from .data import daily_sigma, load_days, rescale
 from .metrics import HEADER, by_year, correlation, daily_pnl, row, summarize
 from .replay import REPLAY_HEADER, day_paths, replay, replay_row
@@ -172,6 +176,155 @@ def cmd_propfirm(args):
                 print(replay_row(program.name, spec, size, r))
 
 
+# --- Bold + Harvest on real bars ----------------------------------------------
+
+def _tape(args):
+    days, keep, info = _load(args)
+    if not keep:
+        raise SystemExit("no sessions in that date range")
+    tape = Tape(days, args.stop, not args.no_time_scale)
+    index = {d.date: i for i, d in enumerate(days)}
+    cfg = Settings(nq=_costs(args), mnq=_costs(args, "MNQ"), max_eval_days=args.max_eval_days,
+                   horizon_days=args.horizon)
+    return tape, index[keep[0].date], index[keep[-1].date] + 1, cfg
+
+
+def cmd_signals(args):
+    tape, lo, hi, cfg = _tape(args)
+    days = tape.days
+    print(f"{hi - lo:,} sessions, {days[lo].date} to {days[hi - 1].date}; one bracket a day "
+          f"risking 1 to make {args.rr:g}, stop {args.stop}, costs included.")
+    print(f"A coin flip wins {1 / (1 + args.rr):.1%} of these before costs, and its mean R is "
+          f"zero before costs.\n")
+    parts = [("all", None, None)]
+    if args.split:
+        parts += [(f"before {args.split}", None, args.split), (f"from {args.split}", args.split, None)]
+    head = "| signal | trades | target | stop | time exit |"
+    rule = "|---|---:|---:|---:|---:|"
+    for label, _, _ in parts:
+        head += f" mean R, {label} | t | win eq |"
+        rule += "---:|---:|---:|"
+    print(head + "\n" + rule)
+    for spec in args.signals.split(";"):
+        full = study(tape, parse_signal(spec), args.rr, args.risk, cfg, lo)
+        full.r = [x for x in full.r if x[0] <= days[hi - 1].date]
+        line = (f"| {spec} | {full.n:,} | {full.share('target'):.0%} | "
+                f"{full.share('stop'):.0%} | {full.share('time'):.0%} |")
+        for _, a, b in parts:
+            s = full.part(a, b)
+            line += f" {s.mean:+.3f} | {s.t:+.1f} | {s.win_eq:.1%} |"
+        print(line)
+
+
+def _usd(x: float) -> str:
+    return f"-${-x:,.0f}" if x < 0 else f"${x:,.0f}"
+
+
+def _evaluate(program, spec, eval_policy, funded_policy, tape, cfg, lo, hi):
+    """(per-evaluation summary, campaign from the first session, campaigns from
+    20 start days, runs) for one signal, or None if nothing could be decided."""
+    runs = all_runs(program, eval_policy, funded_policy, tape, parse_signal(spec), cfg, lo, hi)
+    if not runs:
+        return None
+    camps = [campaign(runs, lo + o, hi) for o in range(20)]
+    return summarize_runs(program, spec, runs.values()), camps[0], camps, runs
+
+
+def _rank(value: float, baseline: list[float]) -> str:
+    return f"{sum(b < value for b in baseline) / len(baseline):.0%}" if baseline else ""
+
+
+def cmd_boldharvest(args):
+    tape, lo, hi, cfg = _tape(args)
+    days = tape.days
+    programs = [load_program(p) for p in _paths(args.programs)]
+    eval_policy, funded_policy = parse_policy(args.eval), parse_policy(args.funded)
+    years = (days[hi - 1].date - days[lo].date).days / 365.25
+    specs = [s for s in args.signals.split(";") if s]
+    print(f"{hi - lo:,} sessions, {days[lo].date} to {days[hi - 1].date} ({years:.1f} years); "
+          f"evaluation {args.eval}, funded {args.funded}; stop {args.stop}; "
+          f"{args.slip_ticks:g} tick(s) slippage per fill, NQ ${cfg.nq.commission:.2f} and "
+          f"MNQ ${cfg.mnq.commission:.2f} a round turn.")
+    coins = args.coins
+    vs = f" beats this share of {coins} coin flips |" if coins else ""
+    per_eval = [f"| program | signal | evaluations | pass | payouts per funded | "
+                f"net per funded | EV per evaluation |{vs}",
+                "|---|---|---:|---:|---:|---:|---:|" + ("---:|" if coins else "")]
+    per_camp = [f"| program | signal | evaluations bought | passed | payouts | trader's share | "
+                f"evaluation fees | funded fees | net profit | a year | worst run of net cash |{vs}",
+                "|---|---|---:|---:|---:|---:|---:|---:|---:|---:|---:|" + ("---:|" if coins else "")]
+    notes, ledger = [], []
+    mean = statistics.fmean
+    for program in programs:
+        base_ev, base_net = [], []
+        if coins:
+            got = [_evaluate(program, f"coin:seed={k}", eval_policy, funded_policy, tape, cfg, lo, hi)
+                   for k in range(1, coins + 1)]
+            got = [g for g in got if g]
+            base_ev = sorted(g[0].ev for g in got)
+            base_net = sorted(g[1].net for g in got)
+            cut = lambda xs, q: xs[min(len(xs) - 1, int(q * len(xs)))]
+            ss, cs = [g[0] for g in got], [g[1] for g in got]
+            pay = mean(mean(a.payouts for a in s.funded) if s.funded else 0.0 for s in ss)
+            per_eval.append(
+                f"| {program.name} | coin flip, mean of {coins} | {ss[0].n:,} | "
+                f"{mean(s.p_pass for s in ss):.1%} | {pay:.2f} | "
+                f"{_usd(mean(s.net_per_funded for s in ss))} | {_usd(mean(base_ev))} "
+                f"({_usd(cut(base_ev, 0.05))} to {_usd(cut(base_ev, 0.95))}) | |")
+            per_camp.append(
+                f"| {program.name} | coin flip, mean of {coins} | {mean(c.evaluations for c in cs):,.0f} | "
+                f"{mean(c.passes for c in cs):,.0f} | {mean(c.payouts for c in cs):,.0f} | "
+                f"{_usd(mean(c.trader_share for c in cs))} | {_usd(-mean(c.eval_fees for c in cs))} | "
+                f"{_usd(-mean(c.funded_fees for c in cs))} | {_usd(mean(base_net))} "
+                f"({_usd(cut(base_net, 0.05))} to {_usd(cut(base_net, 0.95))}) | "
+                f"{_usd(mean(base_net) / years)} | {_usd(-mean(c.worst_drawdown for c in cs))} | |")
+        for spec in specs:
+            got = _evaluate(program, spec, eval_policy, funded_policy, tape, cfg, lo, hi)
+            if got is None:
+                per_eval.append(f"| {program.name} | {spec} | 0 | | | | |")
+                continue
+            s, c, camps, runs = got
+            f = s.funded
+            payouts = mean(a.payouts for a in f) if f else 0.0
+            per_eval.append(
+                f"| {program.name} | {spec} | {s.n:,} | {s.p_pass:.1%} | {payouts:.2f} | "
+                f"{_usd(s.net_per_funded)} | {_usd(s.ev)} |"
+                + (f" {_rank(s.ev, base_ev)} |" if coins else ""))
+            per_camp.append(
+                f"| {program.name} | {spec} | {c.evaluations:,} | {c.passes:,} | {c.payouts:,} | "
+                f"{_usd(c.trader_share)} | {_usd(-c.eval_fees)} | {_usd(-c.funded_fees)} | "
+                f"{_usd(c.net)} | {_usd(c.net / years)} | {_usd(-c.worst_drawdown)} |"
+                + (f" {_rank(c.net, base_net)} |" if coins else ""))
+            nets = sorted(x.net for x in camps)
+            by_year = ", ".join(f"{y}: {_usd(v)}" for y, v in sorted(c.by_year(days).items()))
+            notes.append(f"{program.name}, {spec}: by year {by_year}. Starting on each of the "
+                         f"first 20 sessions instead: {_usd(nets[0])} to {_usd(nets[-1])}. "
+                         f"Commissions and slippage paid inside the accounts: "
+                         f"{_usd(c.trading_costs)}.")
+            ledger.append((program, spec, c))
+    print("\nPer evaluation bought, one started on every session:\n")
+    print("\n".join(per_eval))
+    print("\nNet profit, one account at a time: buy an evaluation, trade it and the funded "
+          "account it earns to the end, buy the next one the session after.\n")
+    print("\n".join(per_camp))
+    print()
+    print("\n".join(notes))
+    if args.ledger:
+        with open(args.ledger, "w", newline="") as fh:
+            w = csv.writer(fh)
+            w.writerow(["program", "signal", "evaluation_bought", "ended", "passed", "eval_days",
+                        "funded_days", "trades", "payouts", "gross_payouts", "trader_share",
+                        "eval_fees", "funded_fees", "net", "commissions_and_slippage"])
+            for program, spec, c in ledger:
+                for r in c.runs:
+                    a = r.attempt
+                    w.writerow([program.name, spec, days[r.start].date, days[r.end].date,
+                                int(a.passed), a.eval_days, a.funded_days, r.trades, a.payouts,
+                                f"{a.gross:.2f}", f"{a.net:.2f}", f"{a.eval_fees:.2f}",
+                                f"{a.funded_fees:.2f}", f"{a.profit:.2f}", f"{r.costs:.2f}"])
+        print(f"\nledger written to {args.ledger}")
+
+
 def _date(s: str) -> date:
     return date.fromisoformat(s)
 
@@ -228,6 +381,45 @@ def build_parser():
     sp.add_argument("--step", type=int, default=1,
                     help="start an evaluation every STEP sessions (default every one)")
     sp.set_defaults(func=cmd_propfirm)
+
+    def bars(sp):
+        sp.add_argument("--stop", default="0.25r",
+                        help="stop width that sizes each trade: points (50), a share of price "
+                             "(0.3%%) or a multiple of the 14-session average range (0.25r, "
+                             "the default)")
+        sp.add_argument("--no-time-scale", action="store_true",
+                        help="keep the stop width fixed all session (default: narrower late in "
+                             "the day, so a trade can still finish)")
+        sp.add_argument("--signals", default="coin;long;orb:n=15",
+                        help="semicolon-separated entry signals: coin, long, short, orb:n=15, "
+                             "orb:n=30,fade=1, first:n=5, mom:t=30, mom:t=30,ref=open, gap, "
+                             "gap:fade=1, noise")
+        sp.add_argument("--max-eval-days", type=int, default=60,
+                        help="give up on an evaluation after this many sessions")
+        sp.add_argument("--horizon", type=int, default=250, help="funded sessions to follow")
+
+    sp = sub.add_parser("signals", help="does an entry signal have an edge? one bracket a day")
+    common(sp)
+    bars(sp)
+    sp.add_argument("--rr", type=float, default=1.5,
+                    help="reward:risk of the test bracket (default 1.5, bold play on a $2,000 "
+                         "drawdown and $3,000 target)")
+    sp.add_argument("--risk", type=float, default=2000.0, help="dollar risk of the test bracket")
+    sp.add_argument("--split", type=_date, help="also report before and from this date")
+    sp.set_defaults(func=cmd_signals)
+
+    sp = sub.add_parser("boldharvest",
+                        help="Bold + Harvest on real bars: net profit after payouts and costs")
+    common(sp)
+    bars(sp)
+    sp.add_argument("--programs", nargs="+", default=["configs/programs/*_50k.toml"])
+    sp.add_argument("--eval", default="bold", help='evaluation policy, e.g. "bold:max_risk_frac=0.5"')
+    sp.add_argument("--funded", default="harvest", help='funded policy, e.g. "harvest:min_odds=0.5"')
+    sp.add_argument("--coins", type=int, default=0, metavar="N",
+                    help="also run N coin-flip entries as the no-edge baseline, and show where "
+                         "each signal falls among them (default 0; 100 takes a few minutes)")
+    sp.add_argument("--ledger", help="write every evaluation of the campaign to this CSV")
+    sp.set_defaults(func=cmd_boldharvest)
     return p
 
 

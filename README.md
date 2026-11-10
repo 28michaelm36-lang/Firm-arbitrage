@@ -19,6 +19,12 @@ It contains:
 - **manual evaluations**: take your real pass rate as given, test it against
   luck, and value the funded side (`manual` command). See
   [docs/manual-evaluations.md](docs/manual-evaluations.md).
+- **Bold + Harvest on real bars** (`python -m intraday boldharvest`): asymmetry2
+  traded on 1-minute NQ bars instead of in the simulator, with the net profit
+  after payouts, fees and trading costs, and a test of whether any entry signal
+  beats a coin flip. See
+  [docs/bold-harvest-backtest.md](docs/bold-harvest-backtest.md). The same
+  logic for NinjaTrader is in `ninjatrader/BoldHarvest.cs`.
 - **published intraday strategies**: the noise-area breakout, last-half-hour
   momentum and the 5-minute ORB, from the finance literature at their
   published parameters, backtested on 1-minute Nasdaq-100 bars and replayed
@@ -148,7 +154,9 @@ intraday/
   strategies.py   noise area, last half hour, 5-minute ORB; fills and costs
   metrics.py      Sharpe, drawdown, trades per week, by year
   replay.py       real fills through a program's floor, loss limit and payouts
-  cli.py          inspect | backtest | propfirm
+  boldharvest.py  Bold + Harvest on real bars: entry signals, fills, campaigns
+  cli.py          inspect | backtest | propfirm | signals | boldharvest
+ninjatrader/      BoldHarvest.cs, the NinjaTrader strategy (not compiled here)
 configs/programs/ illustrative program rules
 docs/             strategy write-ups
 tests/            unittest suite, including the theory checks above
